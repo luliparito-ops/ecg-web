@@ -1,0 +1,7 @@
+Verificado en generación:
+- Babel parser: sintaxis de todos los archivos TS/TSX.
+- Motor real transpilado mediante Babel: 10 casos de model.test.ts ejecutados con arnés de aserciones Node.
+- Dos sesiones malformadas rechazadas.
+- bash -n en scripts.
+Pendiente: instalación completa, chequeo tsc, build Vite/Vitest integrado y prueba de interfaz/navegadores/dispositivos.
+1500 transformaciones adicionales: ancla conservada y aislamiento de ejes.
