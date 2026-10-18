@@ -43,6 +43,7 @@ type Gesture={
  target?:string;
  id?:string;
  draft?:Measure;
+ ext?:boolean;
 };
 
 /* Medidas en píxeles de pantalla (independientes del zoom). */
@@ -220,12 +221,21 @@ export default function Stage(props:Props){
  }
 
  /** Edición relativa: la manija conserva la distancia al dedo (sin saltos al tomarla por el borde de su zona táctil). */
- function edited(g:Gesture,p:Point):State{
+ function edited(g:Gesture,p:Point,sp:Point):State{
   const next=copy(g.before),m=next.measures.find(m=>m.id===g.id),b=g.before.measures.find(m=>m.id===g.id);
   if(!m||!b)return next;
   const dx=p.x-g.start.x,dy=p.y-g.start.y,u=1/Math.max(scale,1e-5);
   if(g.type==='mark'){
    if(g.target==='previous')m.rrPrevious=p.x;else m.rrCurrent=p.x;
+   return next;
+  }
+  const end=/^x([12])([tb])$/.exec(g.target||'');
+  if(end){
+   // Desde un extremo la línea se mueve en horizontal; un gesto vertical claro pasa al modo de extensión.
+   if(!g.ext&&Math.abs(dy*scale)>26&&Math.abs(dy)>2*Math.abs(dx))g.ext=true;
+   if(g.ext){
+    if(end[2]==='t')setEdge(m,'top',(b.top??b.y-JAW*u)+dy,4*u);else setEdge(m,'bottom',(b.bottom??b.y+JAW*u)+dy,4*u);
+   }else if(end[1]==='1')m.x1=b.x1+dx;else m.x2=b.x2+dx;
    return next;
   }
   switch(g.target){
@@ -274,7 +284,7 @@ export default function Stage(props:Props){
   }else if(g.type==='create'&&g.draft){
    g.draft={...g.draft,x2:point.x};setDraft(g.draft);
   }else if(g.type==='edit'||g.type==='mark'){
-   props.onChange(edited(g,point));
+   props.onChange(edited(g,point,p));
   }
  }
 
@@ -308,13 +318,13 @@ export default function Stage(props:Props){
     props.onChange({...g.before,measures:[...g.before.measures,m]});
     props.onSelect(m.id,true);
     setSettle({id:m.id,target:'x2',key:Date.now()});
-    if(!rrHint.current){rrHint.current=true;props.onNotice('Arrastrá ↕ las manijas para abarcar más derivaciones');}
+    if(!rrHint.current){rrHint.current=true;props.onNotice('Tirá hacia arriba o abajo desde un extremo para extender el calibre');}
    }else tapSelect(local(screen(e)));
    setDraft(null);
   }else if(g&&g.type==='nav'&&g.ids.length===1&&!calibrating&&Math.hypot(e.clientX-g.mid.x,e.clientY-g.mid.y)<6){
    tapSelect(local(screen(e)));
   }else if(g&&g.type==='mark'){
-   props.onChange(edited(g,local(screen(e))));
+   props.onChange(edited(g,local(screen(e)),screen(e)));
    props.onCommit(g.before);
    if(g.id)setSettle({id:g.id,target:g.target||'',key:Date.now()});
    props.onMarked?.();
@@ -464,13 +474,14 @@ export default function Stage(props:Props){
   parts.push(<g key="pill">{pill(mx,Math.min(T,B)-(8+PILL_H/2)*unit,value,c,m.kind,isDraft||calibrating?null:'move',m)}</g>);
 
   if(chosen){
-   parts.push(knob(m,X1,Y,'x1',c));
-   if(!m.tangent)parts.push(knob(m,X2,Y,'x2',c));
-   {
-    parts.push(knob(m,mx,T,'top',c),knob(m,mx,B,'bottom',c));
-    parts.push(hitCircle(m,mx,T,'top','ns-resize'),hitCircle(m,mx,B,'bottom','ns-resize'));
-    if(m.top!==undefined&&gap>HIT)parts.push(<rect key="htop" data-handle="top" data-measure={m.id} x={left+inner} y={T-10*unit} width={right-left-2*inner} height={20*unit} fill="transparent" style={{cursor:'ns-resize'}}/>);
-    if(m.bottom!==undefined&&gap>HIT)parts.push(<rect key="hbot" data-handle="bottom" data-measure={m.id} x={left+inner} y={B-10*unit} width={right-left-2*inner} height={20*unit} fill="transparent" style={{cursor:'ns-resize'}}/>);
+   // Manijas solo en los cuatro extremos de las líneas: el punto de medida queda libre.
+   const ends:[number,number,number,string,string][]=[[xa,X1,-dir,'x1',''],...(m.tangent?[]:[[xb,X2,dir,'x2','']] as [number,number,number,string,string][])];
+   for(const [x,X,sgn,nm] of ends){
+    for(const [yy,Yy,k] of [[topY,T,'t'],[botY,B,'b']] as const){
+     parts.push(knob(m,X,Yy,nm+k,c));
+     const a=x-sgn*outer,b2=x+sgn*inner;
+     parts.push(<rect key={'e'+nm+k} data-handle={nm+k} data-measure={m.id} x={Math.min(a,b2)} y={yy-HIT/2*unit} width={Math.abs(b2-a)} height={HIT*unit} fill="transparent" style={{cursor:'ew-resize'}}/>);
+    }
    }
    if(m.kind==='QT'){
     if(m.rrPrevious!==undefined){parts.push(knob(m,m.rrPrevious,rKnob,'previous',c),hitCircle(m,m.rrPrevious,rKnob,'previous','ew-resize'));}
