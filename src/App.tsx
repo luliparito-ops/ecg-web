@@ -273,10 +273,10 @@ export default function App(){
   notify(`${kind}: arrastrá sobre el trazado`);
  }
 
- function selectMeasure(id:string|null){
+ function selectMeasure(id:string|null,keepTool=false){
   setSelected(id);
   if(id){
-   setTool('move');
+   if(!keepTool)setTool('move');
    setActiveBar('measure');
   }
  }
@@ -564,7 +564,7 @@ export default function App(){
            <span className="r-kind">{m.kind}</span>
            {r.value!==null?<><span className="r-num">{r.value}</span><span className="r-unit">ms</span></>:<span className="r-hint">{r.hint}</span>}
           </span>
-          {r.secondary&&<span className="r-sec">{r.secondary}</span>}
+          {(()=>{const sec=r.secondary;return sec?<span className="r-sec">{sec}</span>:null;})()}
          </output>
          <div className="nudge">
           <div className="stepper" role="group" aria-label="Mover 1 ms">

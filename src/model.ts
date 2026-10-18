@@ -66,24 +66,23 @@ export function translate(m:Measure,dx:number,dy:number):void{
  if(m.rrCurrent!==undefined)m.rrCurrent+=dx;
 }
 /**
- * Extiende la mordaza superior o inferior de un RR hasta y. Nunca cruza la barra:
+ * Extiende la mordaza superior o inferior de un calibre hasta y. Nunca cruza la barra:
  * si queda a menos de `min` unidades de ella, la extensión se retira.
  */
 export function setEdge(m:Measure,edge:'top'|'bottom',y:number,min=0):void{
- if(m.kind!=='RR'||!Number.isFinite(y))return;
+ if(!Number.isFinite(y))return;
  const d=edge==='top'?m.y-y:y-m.y;
  if(d<=Math.max(0,min))delete m[edge];else m[edge]=y;
 }
-/** Quita extensiones inválidas (no numéricas, del lado equivocado o en medidas que no son RR). */
+/** Quita extensiones inválidas (no numéricas o del lado equivocado). */
 export function normalizeMeasure(m:Measure):Measure{
- if(m.kind!=='RR'){delete m.top;delete m.bottom;return m;}
  if(m.top!==undefined&&!(Number.isFinite(m.top)&&m.top<m.y))delete m.top;
  if(m.bottom!==undefined&&!(Number.isFinite(m.bottom)&&m.bottom>m.y))delete m.bottom;
  return m;
 }
 /** Distancia vertical medida (unidades del documento): de la mordaza superior a la inferior, o a la barra si solo hay una. */
 export function amplitudeUnits(m:Measure):number|null{
- if(m.kind!=='RR'||(m.top===undefined&&m.bottom===undefined))return null;
+ if(m.top===undefined&&m.bottom===undefined)return null;
  const d=(m.bottom??m.y)-(m.top??m.y);
  return Number.isFinite(d)&&d>0?d:null;
 }

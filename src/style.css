@@ -501,6 +501,6 @@ input[type="range"] { accent-color: var(--tint); margin: 0; height: 28px; cursor
 .row-val { font-weight: 500; font-size: 17px; }
 
 /* Valor y lecturas secundarias en una sola línea. */
-.readout { flex-direction: row; align-items: baseline; gap: 10px; }
+.readout { flex-direction: row; align-items: baseline; justify-content: flex-start; gap: 10px; }
 .r-main { flex: none; }
 .r-sec { flex: 1; min-width: 0; line-height: 24px; }

@@ -69,11 +69,11 @@ describe('Motor ECG',()=>{
    const m=rr();setEdge(m,'top',310);expect(m.top).toBeUndefined();
    setEdge(m,'top',250);expect(m.top).toBe(250);setEdge(m,'top',297,4);expect(m.top).toBeUndefined();
    setEdge(m,'bottom',290);expect(m.bottom).toBeUndefined();setEdge(m,'bottom',Number.NaN);expect(m.bottom).toBeUndefined();
-   const q:Measure={...rr(),kind:'QT'};setEdge(q,'top',200);expect(q.top).toBeUndefined();
+   const q:Measure={...rr(),kind:'QT'};setEdge(q,'top',200);expect(q.top).toBe(200);
   });
   it('normaliza datos inválidos y medidas antiguas',()=>{
    expect(normalizeMeasure({...rr(),top:350,bottom:Number.POSITIVE_INFINITY})).toEqual(rr());
-   expect(normalizeMeasure({...rr(),kind:'PR',top:200})).toEqual({...rr(),kind:'PR'});
+   expect(normalizeMeasure({...rr(),kind:'PR',top:200})).toEqual({...rr(),kind:'PR',top:200});
    expect(normalizeMeasure({...rr(),top:200,bottom:400})).toEqual({...rr(),top:200,bottom:400});
   });
   it('trasladar conserva tiempo y amplitud; copiar (deshacer) conserva la extensión',()=>{

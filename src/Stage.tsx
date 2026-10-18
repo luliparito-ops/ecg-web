@@ -26,7 +26,7 @@ type Props={
  rotation:number;
  onChange:(s:State)=>void;
  onCommit:(before:State)=>void;
- onSelect:(id:string|null)=>void;
+ onSelect:(id:string|null,keepTool?:boolean)=>void;
  onNotice:(s:string)=>void;
  onMarked?:()=>void;
 };
@@ -278,6 +278,21 @@ export default function Stage(props:Props){
   }
  }
 
+ /** Medida bajo un punto (documento): las bloqueadas no reciben eventos, así que un toque corto las localiza por geometría. */
+ function hitMeasure(pt:Point):string|null{
+  const u=1/Math.max(scale,1e-5),tol=14*u;
+  for(let i=state.measures.length-1;i>=0;i--){
+   const m=state.measures[i],xb=intersection(m)??m.x2,lo=Math.min(m.x1,xb),hi=Math.max(m.x1,xb);
+   const t=m.top??m.y-JAW*u,b=m.bottom??m.y+JAW*u;
+   if(pt.x>=lo-tol&&pt.x<=hi+tol&&pt.y>=t-tol&&pt.y<=b+tol)return m.id;
+  }
+  return null;
+ }
+ function tapSelect(pt:Point){
+  const id=hitMeasure(pt);
+  if(id&&id!==selected)props.onSelect(id);
+ }
+
  function up(e:RPointerEvent<SVGSVGElement>){
   if(!pointers.current.has(e.pointerId))return;
   const g=gesture.current;
@@ -291,11 +306,13 @@ export default function Stage(props:Props){
     if(m.x2<m.x1)[m.x1,m.x2]=[m.x2,m.x1];
     props.onCommit(g.before);
     props.onChange({...g.before,measures:[...g.before.measures,m]});
-    props.onSelect(m.id);
+    props.onSelect(m.id,true);
     setSettle({id:m.id,target:'x2',key:Date.now()});
-    if(m.kind==='RR'&&!rrHint.current){rrHint.current=true;props.onNotice('Arrastrá ↕ las manijas para abarcar más derivaciones');}
-   }
+    if(!rrHint.current){rrHint.current=true;props.onNotice('Arrastrá ↕ las manijas para abarcar más derivaciones');}
+   }else tapSelect(local(screen(e)));
    setDraft(null);
+  }else if(g&&g.type==='nav'&&g.ids.length===1&&!calibrating&&Math.hypot(e.clientX-g.mid.x,e.clientY-g.mid.y)<6){
+   tapSelect(local(screen(e)));
   }else if(g&&g.type==='mark'){
    props.onChange(edited(g,local(screen(e))));
    props.onCommit(g.before);
@@ -335,6 +352,7 @@ export default function Stage(props:Props){
  },[state,calibrating,selected,props.onChange,props.onCommit]);
 
  /* ---------- Geometría de pantalla ---------- */
+ const creatingKind=['PR','QRS','QT','RR'].includes(tool);
  const unit=1/Math.max(scale,.00001);
  // Trazo principal: 2 px físicos en pantallas retina (1 px en las de densidad 1). Auxiliar: 1 px físico.
  const MAIN=Math.max(1,Math.round(dpr*.75))/dpr,HAIR=1/dpr;
@@ -385,16 +403,16 @@ export default function Stage(props:Props){
  function renderMeasure(m:Measure,isDraft:boolean){
   const chosen=m.id===selected&&!calibrating&&!isDraft,c=KIND_COLOR[m.kind],end=intersection(m),xb=end??m.x2,xa=m.x1;
   const H=JAW*unit,left=Math.min(xa,xb),right=Math.max(xa,xb),gap=(right-left)*scale;
-  const rr=m.kind==='RR',topY=rr&&m.top!==undefined?m.top:m.y-H,botY=rr&&m.bottom!==undefined?m.bottom:m.y+H;
+  const rr=m.kind==='RR',topY=m.top!==undefined?m.top:m.y-H,botY=m.bottom!==undefined?m.bottom:m.y+H;
   const X1=sx(xa,MAIN),X2=sx(xb,MAIN),Y=sy(m.y,MAIN),T=sy(topY,MAIN),B=sy(botY,MAIN),ext=6*unit;
   const r=readout(m,state.calibration,formula);
   // En el lienzo solo el valor principal: QTc, lpm y mm quedan en el panel para no tapar el trazado.
   const value=r.value===null?'—':`${r.value} ms`;
   let d=`M${X1} ${T}V${B}M${X2} ${T}V${B}M${X1} ${Y}H${X2}`;
-  if(rr&&m.top!==undefined)d+=`M${Math.min(X1,X2)-ext} ${T}H${Math.max(X1,X2)+ext}`;
-  if(rr&&m.bottom!==undefined)d+=`M${Math.min(X1,X2)-ext} ${B}H${Math.max(X1,X2)+ext}`;
+  if(m.top!==undefined)d+=`M${Math.min(X1,X2)-ext} ${T}H${Math.max(X1,X2)+ext}`;
+  if(m.bottom!==undefined)d+=`M${Math.min(X1,X2)-ext} ${B}H${Math.max(X1,X2)+ext}`;
   // Con una medida elegida, las demás quedan bloqueadas: ni se tocan ni se arrastran.
-  const dim=!!selected&&!chosen&&!isDraft&&!calibrating;
+  const dim=(!!selected||creatingKind)&&!chosen&&!isDraft&&!calibrating;
   const mx=(xa+xb)/2,dir=xb>=xa?1:-1,inner=Math.min(14,gap*.3)*unit,outer=(HIT-14)*unit;
   const jawRect=(x:number,s:number,name:string)=>{
    const a=x-s*outer,b=x+s*inner;
@@ -448,7 +466,7 @@ export default function Stage(props:Props){
   if(chosen){
    parts.push(knob(m,X1,Y,'x1',c));
    if(!m.tangent)parts.push(knob(m,X2,Y,'x2',c));
-   if(rr){
+   {
     parts.push(knob(m,mx,T,'top',c),knob(m,mx,B,'bottom',c));
     parts.push(hitCircle(m,mx,T,'top','ns-resize'),hitCircle(m,mx,B,'bottom','ns-resize'));
     if(m.top!==undefined&&gap>HIT)parts.push(<rect key="htop" data-handle="top" data-measure={m.id} x={left+inner} y={T-10*unit} width={right-left-2*inner} height={20*unit} fill="transparent" style={{cursor:'ns-resize'}}/>);
