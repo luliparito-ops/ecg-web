@@ -38,6 +38,10 @@ Esta versión NO incluye service worker, instalación PWA ni funcionamiento offl
 Lenguaje visual de Apple: modo claro/oscuro automático, materiales translúcidos, símbolos de trazo regular sin etiquetas y amarillo como color de acento. Arriba: abrir, páginas, deshacer, girar, grilla y exportar. Abajo: Medir, Calibrar y Medidas. Calibrar y medir muestran un botón amarillo ✓ para terminar.
 
 ## 1. Calibración
+**Método de 4 puntos (por defecto en imágenes y fotos).** Tocá las 4 esquinas de un cuadrado de 25 mm (5×5 cuadros grandes), en sentido horario desde arriba a la izquierda. Cada esquina se arrastra para afinarla (aparece la lupa) y una malla de verificación muestra cómo se proyecta el cuadrado sobre el papel. Al confirmar: si el cuadrado ya está recto (capturas de pantalla) solo se fija la escala por eje; si no (fotos con perspectiva o giro), la imagen se endereza por homografía y se calibra sobre la imagen corregida. Volver a calibrar parte siempre del original. Enderezar descarta medidas previas. La precisión depende de cuántos píxeles ocupe 1 mm en la foto: con ~4 px/mm el error de un clic es de ~0,5 %. Límite de salida 4096 px por lado / 12 MP.
+
+**Método de grilla (por defecto en PDF).** El descrito a continuación.
+
 Elegí Tiempo ↔. Un dedo mueve la grilla; dos dedos ajustan escala horizontal y posición al mismo tiempo. Altura ↕ es independiente; Proporcional mantiene la relación actual entre los ejes.
 
 Indicá la velocidad impresa en ESE panel, verificá líneas de 1, 5 y 25 mm, coincidencia al principio, centro y final. Listo aplica. Cancelar recupera TODO el estado anterior de calibración. Las medidas se recalculan a partir de sus coordenadas originales; no se mueven los puntos. Se permite mucha compresión (mínimo técnico 0.0001 unidades/mm). Las líneas a menos de 3 píxeles CSS se ocultan sin bloquear la escala.

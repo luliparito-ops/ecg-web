@@ -21,6 +21,8 @@ const paths:Record<string,React.ReactNode>={
  arrowY:<path d="M12 3.5v17M8 7.5l4-4 4 4M8 16.5l4 4 4-4"/>,
  arrowBoth:<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/>,
  fit:<path d="M4 9V6a2 2 0 0 1 2-2h3M15 4h3a2 2 0 0 1 2 2v3M20 15v3a2 2 0 0 1-2 2h-3M9 20H6a2 2 0 0 1-2-2v-3"/>,
+ quad:<><path d="M6.5 6.5 18 5l-1.5 13L5 17Z" opacity=".6"/><circle cx="6.5" cy="6.5" r="1.9" fill="currentColor"/><circle cx="18" cy="5" r="1.9" fill="currentColor"/><circle cx="16.5" cy="18" r="1.9" fill="currentColor"/><circle cx="5" cy="17" r="1.9" fill="currentColor"/></>,
+ opacity:<><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17Z" fill="currentColor" stroke="none"/></>,
  photo:<><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m4 17 4.6-4.4a1.5 1.5 0 0 1 2.1 0L14 16l1.6-1.6a1.5 1.5 0 0 1 2.1 0L20 16.7"/></>
 };
 export default function Icon({name}:{name:string}){

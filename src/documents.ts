@@ -1,7 +1,7 @@
 import {getDocument,GlobalWorkerOptions,type PDFDocumentProxy} from 'pdfjs-dist';
 import workerURL from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 GlobalWorkerOptions.workerSrc=workerURL;
-export type DocumentData={file:File;kind:'image'|'pdf';url:string;width:number;height:number;pages:number;pdf?:PDFDocumentProxy;page:number};
+export type DocumentData={file:File;kind:'image'|'pdf';url:string;width:number;height:number;pages:number;pdf?:PDFDocumentProxy;page:number;original?:DocumentData};
 export async function loadDocument(file:File):Promise<DocumentData>{
  if(file.size>60*1024*1024)throw Error('Archivo mayor de 60 MB. Usá una página o recorte más pequeño.');
  const url=URL.createObjectURL(file);

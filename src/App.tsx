@@ -3,7 +3,8 @@ import {Button} from 'react-aria-components';
 import Stage,{type Tool} from './Stage';
 import Icon from './Icons';
 import {loadDocument,download,type DocumentData} from './documents';
-import {copy,scaled,validCalibration,initialCalibration,summary,duration,previousRR,corrected,intersection,type State,type Axis,type Kind,type Formula,type Measure} from './model';
+import {copy,scaled,validCalibration,initialCalibration,summary,duration,previousRR,corrected,intersection,orderQuad,quadProblem,axisAligned,quadCalibration,SQUARE_MM,type Point,type State,type Axis,type Kind,type Formula,type Measure} from './model';
+import {rectify} from './rectify';
 
 type ActiveBar='main'|'measure'|'cal';
 type ModalSheet='records'|null;
@@ -31,7 +32,9 @@ export default function App(){
  const undoStack=useRef<State[]>([]),redoStack=useRef<State[]>([]);
  const [canUndo,setCanUndo]=useState(false);
  const [canRedo,setCanRedo]=useState(false);
- const calSnapshot=useRef<State|null>(null);
+ const calSnapshot=useRef<State|null>(null),calDoc=useRef<DocumentData|null>(null);
+ const [calMode,setCalMode]=useState<'grid'|'quad'>('grid');
+ const [calQuad,setCalQuad]=useState<Point[]>([]);
  const fileInput=useRef<HTMLInputElement>(null);
  const noticeTimer=useRef<ReturnType<typeof setTimeout>>();
 
@@ -47,7 +50,11 @@ export default function App(){
  },[]);
 
  useEffect(()=>()=>{if(noticeTimer.current)clearTimeout(noticeTimer.current);},[]);
- useEffect(()=>()=>{if(doc){URL.revokeObjectURL(doc.url);void doc.pdf?.destroy();}},[doc?.url]);
+ function release(d:DocumentData|null){
+  if(!d)return;
+  URL.revokeObjectURL(d.url);
+  if(d.original)release(d.original);else void d.pdf?.destroy();
+ }
 
  function change(s:State){stateRef.current=s;setState(s);}
  function record(before:State){
@@ -79,30 +86,74 @@ export default function App(){
   if(!doc){notify('Primero abrí una imagen o un PDF.');return;}
   if(calSnapshot.current)return;
   calSnapshot.current=copy(stateRef.current);
+  calDoc.current=doc;
+  setCalQuad([]);
+  const fromPhoto=doc.original||doc.kind==='image';
+  setCalMode(fromPhoto?'quad':'grid');
+  if(doc.original){setDoc(doc.original);change(newState());}
   setAxis('x');
   setSpeedText(String(stateRef.current.calibration.speed||25));
   setTool('move');
   setActiveBar('cal');
   setModal(null);
-  notify('Un dedo mueve la grilla · dos dedos la escalan');
+  notify(fromPhoto?'Tocá las 4 esquinas del cuadrado de 25 mm, en sentido horario desde arriba a la izquierda':'Un dedo mueve la grilla · dos dedos la escalan');
  }
 
  function cancelCalibration(){
   if(calSnapshot.current){change(calSnapshot.current);calSnapshot.current=null;}
+  if(calDoc.current&&calDoc.current!==docRef.current)setDoc(calDoc.current);
+  calDoc.current=null;setCalQuad([]);
   setActiveBar('main');
   notify('Calibración anterior restaurada.');
  }
 
- function applyCalibration(){
+ function modeChange(mode:'grid'|'quad'){
+  setCalMode(mode);
+  setCalQuad([]);
+  notify(mode==='quad'?'Tocá las 4 esquinas del cuadrado de 25 mm, en sentido horario desde arriba a la izquierda':'Un dedo mueve la grilla · dos dedos la escalan');
+ }
+
+ function finishCalibration(next:State,newDoc?:DocumentData){
+  const snap=calDoc.current;
+  if(snap&&snap.original&&snap!==(newDoc??docRef.current))URL.revokeObjectURL(snap.url);
+  if(newDoc){setDoc(newDoc);undoStack.current=[];redoStack.current=[];syncHistory();setSelected(null);}
+  else if(calSnapshot.current)record(calSnapshot.current);
+  change(next);
+  calSnapshot.current=null;calDoc.current=null;setCalQuad([]);
+  setActiveBar('main');
+ }
+
+ async function applyCalibration(){
   const speed=Number(speedText);
   if(!Number.isFinite(speed)||speed<=0||speed>1000){notify('Indicá una velocidad válida.');return;}
+  if(calMode==='quad'){
+   if(calQuad.length<4){notify('Marcá las 4 esquinas.');return;}
+   const q=orderQuad(calQuad),problem=quadProblem(q);
+   if(problem){notify(problem);return;}
+   if(axisAligned(q)){
+    const c=quadCalibration(q,SQUARE_MM,speed);
+    if(!validCalibration(c)){notify('Escala inválida.');return;}
+    finishCalibration({...stateRef.current,calibration:c});
+    notify('Calibrado.');
+    return;
+   }
+   if(!doc)return;
+   setBusy(true);
+   try{
+    const r=await rectify(doc,q,SQUARE_MM);
+    finishCalibration({calibration:{sx:r.ppmm,sy:r.ppmm,x:r.origin.x,y:r.origin.y,speed,confirmed:true},measures:[]},r.doc);
+    notify('Imagen enderezada y calibrada.');
+   }catch(e){
+    notify(e instanceof Error?e.message:'No se pudo enderezar.');
+   }finally{
+    setBusy(false);
+   }
+   return;
+  }
   const c={...stateRef.current.calibration,speed,confirmed:true};
   if(!validCalibration(c)){notify('Escala inválida.');return;}
-  if(calSnapshot.current)record(calSnapshot.current);
-  change({...stateRef.current,calibration:c});
-  calSnapshot.current=null;
-  setActiveBar('main');
-  notify('Calibración aplicada correctamente.');
+  finishCalibration({...stateRef.current,calibration:c});
+  notify('Calibrado.');
  }
 
  function nudge(r:number){
@@ -190,6 +241,7 @@ export default function App(){
   setBusy(true);
   try{
    const d=await loadDocument(file);
+   release(docRef.current);
    setDoc(d);
    change(newState());
    setSelected(null);
@@ -275,6 +327,9 @@ export default function App(){
      state={state}
      tool={tool}
      calibrating={calibrating}
+     calMode={calMode}
+     quad={calQuad}
+     onQuad={setCalQuad}
      axis={axis}
      selected={selected}
      formula={formula}
@@ -301,7 +356,7 @@ export default function App(){
     <header className="top-bar">
      {activeBar==='cal'?(
       <>
-       <div className="bar-group">{done(applyCalibration,'Listo')}{<Btn icon="close" label="Cancelar" className="plain" onPress={cancelCalibration}/>}</div>
+       <div className="bar-group">{done(()=>void applyCalibration(),'Listo')}{<Btn icon="close" label="Cancelar" className="plain" onPress={cancelCalibration}/>}</div>
       </>
      ):activeBar==='measure'?(
       <>
@@ -358,24 +413,39 @@ export default function App(){
 
      {activeBar==='cal'&&(
       <nav className="card glass cal-card" aria-label="Calibración">
-       <div className="segmented" role="group" aria-label="Eje">
-        {([['both','arrowBoth','Ambos ejes'],['x','arrowX','Tiempo'],['y','arrowY','Amplitud']] as const).map(([a,ic,label])=>(
-         <button type="button" key={a} aria-label={label} title={label} className={'seg'+(axis===a?' on':'')} onClick={()=>setAxis(a)}><Icon name={ic}/></button>
-        ))}
+       <div className="segmented" role="group" aria-label="Método">
+        <button type="button" aria-label="Grilla" title="Grilla" className={'seg'+(calMode==='grid'?' on':'')} onClick={()=>modeChange('grid')}><Icon name="grid"/></button>
+        <button type="button" aria-label="4 puntos" title="4 puntos" className={'seg'+(calMode==='quad'?' on':'')} onClick={()=>modeChange('quad')}><Icon name="quad"/></button>
        </div>
+       {calMode==='grid'&&(
+        <div className="segmented" role="group" aria-label="Eje">
+         {([['both','arrowBoth','Ambos ejes'],['x','arrowX','Tiempo'],['y','arrowY','Amplitud']] as const).map(([a,ic,label])=>(
+          <button type="button" key={a} aria-label={label} title={label} className={'seg'+(axis===a?' on':'')} onClick={()=>setAxis(a)}><Icon name={ic}/></button>
+         ))}
+        </div>
+       )}
        <div className="segmented" role="group" aria-label="Velocidad">
         {['25','50'].map(v=>(
          <Button key={v} className={'seg txt'+(speedText===v?' on':'')} onPress={()=>setSpeedText(v)}>{v}<small>mm/s</small></Button>
         ))}
        </div>
-       <div className="stepper">
-        <Btn icon="minus" label="Reducir escala" onPress={()=>nudge(.98)}/>
-        <Btn icon="plus" label="Aumentar escala" onPress={()=>nudge(1.02)}/>
-       </div>
-       <label className="opacity" title="Opacidad de la grilla">
-        <Icon name="grid"/>
-        <input type="range" min=".1" max=".9" step=".02" value={opacity} onChange={e=>setOpacity(+e.target.value)}/>
-       </label>
+       {calMode==='grid'?(
+        <>
+         <div className="stepper">
+          <Btn icon="minus" label="Reducir escala" onPress={()=>nudge(.98)}/>
+          <Btn icon="plus" label="Aumentar escala" onPress={()=>nudge(1.02)}/>
+         </div>
+         <label className="opacity" title="Opacidad de la grilla">
+          <Icon name="opacity"/>
+          <input type="range" min=".1" max=".9" step=".02" value={opacity} onChange={e=>setOpacity(+e.target.value)}/>
+         </label>
+        </>
+       ):(
+        <div className="quad-count">
+         <span>{calQuad.length}/4</span>
+         <Btn icon="trash" label="Borrar puntos" disabled={!calQuad.length} className="danger" onPress={()=>setCalQuad([])}/>
+        </div>
+       )}
       </nav>
      )}
 

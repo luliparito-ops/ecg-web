@@ -2,7 +2,7 @@ import Icon from './Icons';
 import {useEffect,useId,useRef,useState,type PointerEvent as RPointerEvent} from 'react';
 import type {DocumentData} from './documents';
 import PDFLayer from './PDFLayer';
-import {clamp,copy,scaled,positions,intersection,summary,type Axis,type Kind,type Measure,type Point,type State} from './model';
+import {clamp,copy,scaled,positions,intersection,summary,paperToImage,applyH,orderQuad,SQUARE_MM,type Axis,type Kind,type Measure,type Point,type State} from './model';
 
 export type Tool='move'|Kind|'previous'|'current';
 type Camera={zoom:number;pan:Point};
@@ -11,6 +11,9 @@ type Props={
  state:State;
  tool:Tool;
  calibrating:boolean;
+ calMode:'grid'|'quad';
+ quad:Point[];
+ onQuad:(q:Point[])=>void;
  axis:Axis;
  selected:string|null;
  formula:import('./model').Formula;
@@ -23,7 +26,9 @@ type Props={
  onNotice:(s:string)=>void;
 };
 type Gesture={
- type:'nav'|'grid'|'create'|'edit'|'mark';
+ type:'nav'|'grid'|'create'|'edit'|'mark'|'qtap'|'qpoint';
+ index?:number;
+ moved?:boolean;
  ids:number[];
  mid:Point;
  distance:number;
@@ -36,7 +41,8 @@ type Gesture={
 };
 
 export default function Stage(props:Props){
- const {doc,state,tool,calibrating,axis,selected,formula,gridVisible,opacity,rotation}=props;
+ const {doc,state,tool,calibrating,calMode,quad,axis,selected,formula,gridVisible,opacity,rotation}=props;
+ const quadMode=calibrating&&calMode==='quad';
  const svg=useRef<SVGSVGElement>(null),group=useRef<SVGGElement>(null),host=useRef<HTMLDivElement>(null);
  const [size,setSize]=useState({w:390,h:844}),[camera,setCamera]=useState<Camera>({zoom:1,pan:{x:0,y:0}}),[draft,setDraft]=useState<Measure|null>(null),[lens,setLens]=useState<Point|null>(null);
  const pointers=useRef(new Map<number,Point>()),gesture=useRef<Gesture|null>(null),timer=useRef<ReturnType<typeof setTimeout>>(),longActive=useRef(false);
@@ -94,7 +100,7 @@ export default function Stage(props:Props){
 
  function startNavigation(){
   const ids=[...pointers.current.keys()].slice(0,2),m=metrics(ids);
-  gesture.current={type:calibrating?'grid':'nav',ids,...m,camera:copy(camera),before:copy(state),start:local(m.mid)};
+  gesture.current={type:calibrating&&calMode==='grid'?'grid':'nav',ids,...m,camera:copy(camera),before:copy(state),start:local(m.mid)};
  }
  function stopLens(){if(timer.current)clearTimeout(timer.current);longActive.current=false;setLens(null);}
 
@@ -125,7 +131,15 @@ export default function Stage(props:Props){
   const handle=target.closest('[data-handle]');
   const mid=target.closest('[data-measure]')?.getAttribute('data-measure');
 
-  if(calibrating){
+  if(quadMode){
+   const qi=target.closest('[data-qpoint]')?.getAttribute('data-qpoint');
+   if(qi!==null&&qi!==undefined){
+    gesture.current={type:'qpoint',ids:[e.pointerId],mid:p,distance:0,camera:copy(camera),before:copy(state),start:point,index:+qi};
+    longActive.current=true;setLens(point);
+   }else{
+    gesture.current={type:'qtap',ids:[e.pointerId],mid:p,distance:0,camera:copy(camera),before:copy(state),start:point,moved:false};
+   }
+  }else if(calibrating){
    startNavigation();
   }else if(handle&&mid){
    props.onSelect(mid);
@@ -198,11 +212,15 @@ export default function Stage(props:Props){
   if(!longActive.current&&Math.hypot(p.x-g.mid.x,p.y-g.mid.y)>8&&timer.current)clearTimeout(timer.current);
   if(longActive.current)setLens(point);
 
-  if(g.type==='grid'){
+  if(g.type==='qtap'&&!g.moved&&Math.hypot(p.x-g.mid.x,p.y-g.mid.y)>8)g.moved=true;
+
+  if(g.type==='qpoint'&&g.index!==undefined){
+   props.onQuad(quad.map((q,i)=>i===g.index?point:q));
+  }else if(g.type==='grid'){
    const ratio=m.distance&&g.distance>3?m.distance/g.distance:1;
    const c=scaled(g.before.calibration,ratio,g.start,local(m.mid),axis);
    props.onChange({...state,calibration:c});
-  }else if(g.type==='nav'){
+  }else if(g.type==='nav'||(g.type==='qtap'&&g.moved)){
    const ratio=m.distance&&g.distance>3?m.distance/g.distance:1;
    const z=clamp(g.camera.zoom*ratio,.3,100),r=z/g.camera.zoom;
    const rect=svg.current!.getBoundingClientRect();
@@ -219,7 +237,9 @@ export default function Stage(props:Props){
   if(!pointers.current.has(e.pointerId))return;
   const g=gesture.current;
   stopLens();
-  if(g&&g.type==='create'&&g.draft){
+  if(g&&g.type==='qtap'&&!g.moved&&quad.length<4){
+   props.onQuad([...quad,local(screen(e))]);
+  }else if(g&&g.type==='create'&&g.draft){
    const m=g.draft;
    if(Math.abs(m.x2-m.x1)*scale>=4){
     if(m.x2<m.x1)[m.x1,m.x2]=[m.x2,m.x1];
@@ -279,7 +299,8 @@ export default function Stage(props:Props){
   );
  }
 
- const showGrid=calibrating||gridVisible;
+ const showGrid=(calibrating&&calMode==='grid')||gridVisible;
+ const ordered=quad.length===4?orderQuad(quad):quad;
 
  return (
   <div ref={host} className="stage">
@@ -296,7 +317,7 @@ export default function Stage(props:Props){
      e.preventDefault();
      if(pointers.current.size)return;
      const p={x:e.clientX,y:e.clientY},r=Math.exp(clamp(-e.deltaY*.002,-2,2));
-     if(calibrating){
+     if(calibrating&&calMode==='grid'){
       const point=local(p);
       props.onChange({...state,calibration:scaled(state.calibration,r,point,point,axis)});
      }else{
@@ -405,6 +426,28 @@ export default function Stage(props:Props){
         </g>
        );
       })}
+
+      {quadMode&&(()=>{
+       const H=ordered.length===4?paperToImage(ordered,SQUARE_MM):null;
+       const line=(a:Point,b:Point)=>{const p=applyH(H!,a),q=applyH(H!,b);return p&&q?`M${p.x} ${p.y}L${q.x} ${q.y}`:'';};
+       const cell=Math.hypot(ordered[1]?.x-ordered[0]?.x||0,ordered[1]?.y-ordered[0]?.y||0)*scale/SQUARE_MM;
+       const mm=Array.from({length:SQUARE_MM+1},(_,i)=>i);
+       return (
+        <g>
+         {H&&cell>=5&&<path d={mm.filter(i=>i%5).map(i=>line({x:i,y:0},{x:i,y:SQUARE_MM})+line({x:0,y:i},{x:SQUARE_MM,y:i})).join('')} stroke="#1bb9d9" strokeWidth={.5*unit} opacity=".7" fill="none" pointerEvents="none"/>}
+         {H&&<path d={mm.filter(i=>i%5===0).map(i=>line({x:i,y:0},{x:i,y:SQUARE_MM})+line({x:0,y:i},{x:SQUARE_MM,y:i})).join('')} stroke="#377df0" strokeWidth={unit} opacity=".9" fill="none" pointerEvents="none"/>}
+         {quad.length>1&&<path d={`M${ordered.map(p=>`${p.x} ${p.y}`).join('L')}${quad.length===4?'Z':''}`} stroke="#ffcc00" strokeWidth={1.4*unit} fill="none" pointerEvents="none"/>}
+         {quad.map((p,i)=>(
+          <g key={i} data-qpoint={i} style={{cursor:'crosshair'}}>
+           <circle cx={p.x} cy={p.y} r={24*unit} fill="transparent"/>
+           <circle cx={p.x} cy={p.y} r={4*unit} fill="none" stroke="#ffcc00" strokeWidth={1.3*unit}/>
+           <circle cx={p.x} cy={p.y} r={.9*unit} fill="#ffcc00"/>
+           <text x={p.x+9*unit} y={p.y-9*unit} fontSize={12*unit} fontWeight="700" fill="#ffcc00" stroke="#1c1c1e" strokeWidth={3*unit} paintOrder="stroke" pointerEvents="none">{i+1}</text>
+          </g>
+         ))}
+        </g>
+       );
+      })()}
      </g>
     </g>
    </svg>

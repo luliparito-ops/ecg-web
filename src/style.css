@@ -232,6 +232,8 @@ svg.sf {
 .stepper .sf-btn { width: 36px; height: 36px; border-radius: 999px; }
 .hud-row.tools .sf-btn { width: 36px; height: 36px; }
 .hud-row.tools .stepper .sf-btn { width: 36px; }
+.quad-count { display: flex; align-items: center; gap: 4px; color: var(--label-2); font-size: 15px; font-variant-numeric: tabular-nums; }
+.quad-count .sf-btn { width: 40px; height: 36px; }
 .opacity { display: flex; align-items: center; gap: 8px; color: var(--label-2); }
 .opacity input, .angle input { width: 110px; accent-color: var(--tint); }
 
