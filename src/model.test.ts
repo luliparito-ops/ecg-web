@@ -1,3 +1,4 @@
+import {parseSpeed,latticePitch,gridDeviation,PT_PER_MM} from './pdfvector';
 import {describe,it,expect} from 'vitest';
 import {initialCalibration,scaled,timeMS,corrected,intersection,previousRR,duration,positions,homography,applyH,invertH,orderQuad,quadProblem,axisAligned,quadCalibration,paperToImage,type Measure} from './model';
 const c={...initialCalibration(),sx:10,sy:7,confirmed:true};
@@ -37,5 +38,11 @@ describe('Motor ECG',()=>{
  it('plano del papel: el centro del cuadrado cae en el centro de la imagen',()=>{
   const q=[{x:100,y:50},{x:300,y:70},{x:310,y:270},{x:90,y:250}],h=paperToImage(q,25)!;
   const o=applyH(h,{x:0,y:0})!;expect(o.x).toBeCloseTo(100);expect(o.y).toBeCloseTo(50);
+ });
+ it('lee la velocidad impresa del texto',()=>{expect(parseSpeed('Strip 25.0 mm/s  5.0 mm/mV')).toBe(25);expect(parseSpeed('50,0 mm / s')).toBe(50);expect(parseSpeed('sin dato')).toBeNull();});
+ it('encuentra el paso de una retícula y su desvío frente al milímetro físico',()=>{
+  const xs=Array.from({length:60},(_,i)=>10+i*2.88);expect(latticePitch(xs)).toBeCloseTo(2.88);
+  expect(latticePitch([1,2,3])).toBeNull();
+  expect(gridDeviation(2.88)!).toBeCloseTo(2.88/PT_PER_MM-1,6);expect(Math.abs(gridDeviation(5*PT_PER_MM)!)).toBeLessThan(1e-9);
  });
 });

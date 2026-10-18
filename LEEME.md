@@ -40,7 +40,9 @@ Lenguaje visual de Apple: modo claro/oscuro automático, materiales translúcido
 ## 1. Calibración
 **Método de 4 puntos (por defecto en imágenes y fotos).** Tocá las 4 esquinas de un cuadrado de 25 mm (5×5 cuadros grandes), en sentido horario desde arriba a la izquierda. Cada esquina se arrastra para afinarla (aparece la lupa) y una malla de verificación muestra cómo se proyecta el cuadrado sobre el papel. Al confirmar: si el cuadrado ya está recto (capturas de pantalla) solo se fija la escala por eje; si no (fotos con perspectiva o giro), la imagen se endereza por homografía y se calibra sobre la imagen corregida. Volver a calibrar parte siempre del original. Enderezar descarta medidas previas. La precisión depende de cuántos píxeles ocupe 1 mm en la foto: con ~4 px/mm el error de un clic es de ~0,5 %. Límite de salida 4096 px por lado / 12 MP.
 
-**Método de grilla (por defecto en PDF).** El descrito a continuación.
+**PDF (automático).** Al abrir un PDF, o cambiar de página, se calibra solo: escala física del papel (1/72 in por punto) y velocidad leída del texto («25.0 mm/s»; si no aparece se supone 25 y el aviso lo dice). Si la página trae una retícula vectorial de puntos o líneas, se compara su paso con el milímetro físico y se avisa cuando difiere más de 0,5 %. Validado con un informe de tiras de Holter: 6 latidos seguidos midieron 2438 ms contra 2444 ms impresos (0,25 %). Esto asume que el PDF se imprimió al 100 %; si no es así, usá Calibrar.
+
+**Método de grilla.** El descrito a continuación.
 
 Elegí Tiempo ↔. Un dedo mueve la grilla; dos dedos ajustan escala horizontal y posición al mismo tiempo. Altura ↕ es independiente; Proporcional mantiene la relación actual entre los ejes.
 

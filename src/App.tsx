@@ -5,6 +5,7 @@ import Icon from './Icons';
 import {loadDocument,download,type DocumentData} from './documents';
 import {copy,scaled,validCalibration,initialCalibration,summary,duration,previousRR,corrected,intersection,orderQuad,quadProblem,axisAligned,quadCalibration,SQUARE_MM,type Point,type State,type Axis,type Kind,type Formula,type Measure} from './model';
 import {rectify} from './rectify';
+import {pageScale,gridDeviation,PT_PER_MM} from './pdfvector';
 
 type ActiveBar='main'|'measure'|'cal';
 type ModalSheet='records'|null;
@@ -236,6 +237,18 @@ export default function App(){
   }
  }
 
+ /** PDF: escala física del papel y velocidad impresa; avisa si la grilla dibujada no coincide. */
+ async function autoCalibrate(d:DocumentData):Promise<{state:State;message:string}>{
+  let speed:number|null=null,pitch:number|null=null;
+  try{({speed,pitch}=await pageScale(d));}catch{/* sin lectura vectorial: se usa la escala física con 25 mm/s */}
+  const v=speed??25,dev=pitch?gridDeviation(pitch):null;
+  const warn=dev!==null&&Math.abs(dev)>.005?` · la grilla del PDF difiere ${dev>0?'+':''}${(dev*100).toFixed(1)} %, verificá`:'';
+  return {
+   state:{calibration:{sx:PT_PER_MM,sy:PT_PER_MM,x:0,y:0,speed:v,confirmed:true},measures:[]},
+   message:`Calibrado · ${v} mm/s${speed?'':' (supuesta)'}${warn}`
+  };
+ }
+
  async function openFile(file:File){
   if(!allowed())return;
   setBusy(true);
@@ -243,13 +256,14 @@ export default function App(){
    const d=await loadDocument(file);
    release(docRef.current);
    setDoc(d);
-   change(newState());
+   const auto=d.kind==='pdf'?await autoCalibrate(d):null;
+   change(auto?auto.state:newState());
    setSelected(null);
    setTool('move');
    setActiveBar('main');
    undoStack.current=[];redoStack.current=[];syncHistory();
    setModal(null);
-   notify('Calibrá para empezar a medir.');
+   notify(auto?auto.message:'Calibrá para empezar a medir.');
   }catch(e){
    notify(e instanceof Error?e.message:'No se pudo abrir.');
   }finally{
@@ -264,11 +278,12 @@ export default function App(){
   setBusy(true);
   try{
    const pg=await doc.pdf.getPage(n),vp=pg.getViewport({scale:1});
-   setDoc({...doc,page:n,width:vp.width,height:vp.height});
-   change(newState());
+   const nd={...doc,page:n,width:vp.width,height:vp.height},auto=await autoCalibrate(nd);
+   setDoc(nd);
+   change(auto.state);
    setSelected(null);
    undoStack.current=[];redoStack.current=[];syncHistory();
-   notify('Calibrá esta página.');
+   notify(auto.message);
   }catch(e){
    notify(e instanceof Error?e.message:'Error de página.');
   }finally{
