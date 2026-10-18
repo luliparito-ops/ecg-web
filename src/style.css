@@ -10,6 +10,7 @@
   -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
 
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
   --tint: #ffcc00;            /* relleno de acento */
   --tint-ink: #1c1c1e;        /* texto sobre el acento */
   --tint-glyph: #a07400;      /* símbolo activo sobre material claro (≥ 3:1) */
@@ -490,3 +491,11 @@ input[type="range"] { accent-color: var(--tint); margin: 0; height: 28px; cursor
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* LECTURAS: tipografía de instrumento, distinta de la de la interfaz. */
+.r-num, .r-sec, .r-unit, .r-hint, .angle span, .amp, .row-val, .row-sec, .quad-count span { font-family: var(--mono); letter-spacing: 0; }
+.r-num { font-size: 22px; font-weight: 500; line-height: 24px; }
+.r-unit { font-size: 13px; }
+.r-sec { font-size: 12px; }
+.r-kind { font-size: 13px; font-weight: 700; letter-spacing: .04em; }
+.row-val { font-weight: 500; font-size: 17px; }

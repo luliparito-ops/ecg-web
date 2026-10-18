@@ -407,7 +407,7 @@ export default function App(){
      <button type="button" className="amp-clear" aria-label="Quitar amplitud" title="Quitar amplitud" onClick={()=>updateMeasure(mm=>{delete mm.top;delete mm.bottom;})}><Icon name="close"/></button>
     </span>
    ):(
-    <span className="amp hint"><Icon name="arrowY"/><span>Arrastrá arriba o abajo para amplitud</span></span>
+    <span className="amp hint"><Icon name="arrowY"/><span>Estirá ↕ para abarcar derivaciones</span></span>
    )}
   </>
  ):null;

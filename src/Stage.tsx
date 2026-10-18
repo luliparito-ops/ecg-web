@@ -2,7 +2,7 @@ import Icon from './Icons';
 import {useEffect,useId,useRef,useState,type PointerEvent as RPointerEvent,type ReactNode} from 'react';
 import type {DocumentData} from './documents';
 import PDFLayer from './PDFLayer';
-import {clamp,copy,scaled,positions,intersection,readout,translate,setEdge,amplitudeMV,num,paperToImage,applyH,orderQuad,SQUARE_MM,type Axis,type Formula,type Kind,type Measure,type Point,type State} from './model';
+import {clamp,copy,scaled,positions,intersection,readout,translate,setEdge,paperToImage,applyH,orderQuad,SQUARE_MM,type Axis,type Formula,type Kind,type Measure,type Point,type State} from './model';
 
 export type Tool='move'|Kind|'previous'|'current';
 
@@ -48,15 +48,16 @@ type Gesture={
 /* Medidas en píxeles de pantalla (independientes del zoom). */
 const JAW=34;          // media altura de las mordazas sin extender
 const HIT=44;          // objetivo táctil mínimo (HIG)
-const KNOB=3.5;        // radio visible de una manija
-const PILL_H=18,PILL_PAD=7,PILL_FONT=11;
-const FONT='-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif';
+const KNOB=4.5;        // radio visible de una manija
+const PILL_H=22,PILL_PAD=9,PILL_FONT=12.5;
+/* Las lecturas usan una tipografía de instrumento (monoespaciada), distinta de la de la interfaz. */
+const FONT='ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace';
 const HALO='rgba(255,255,255,.82)',INK='#3A3A3C',GRID_FINE='#0A84FF',GRID_BOLD='#FF9F0A',QUAD='#FFC300';
 
 let measureCtx:CanvasRenderingContext2D|null|undefined;
 const widthCache=new Map<string,number>();
 /** Ancho de texto en px de pantalla para dimensionar las píldoras. */
-function textWidth(text:string,weight=600,size=PILL_FONT){
+function textWidth(text:string,weight=500,size=PILL_FONT){
  const key=`${weight}|${size}|${text}`;
  let w=widthCache.get(key);
  if(w===undefined){
@@ -292,7 +293,7 @@ export default function Stage(props:Props){
     props.onChange({...g.before,measures:[...g.before.measures,m]});
     props.onSelect(m.id);
     setSettle({id:m.id,target:'x2',key:Date.now()});
-    if(m.kind==='RR'&&!rrHint.current){rrHint.current=true;props.onNotice('Arrastrá ↕ las manijas para medir amplitud');}
+    if(m.kind==='RR'&&!rrHint.current){rrHint.current=true;props.onNotice('Arrastrá ↕ las manijas para abarcar más derivaciones');}
    }
    setDraft(null);
   }else if(g&&g.type==='mark'){
@@ -374,7 +375,7 @@ export default function Stage(props:Props){
   return (
    <g data-handle={handle??undefined} data-measure={handle?m.id:undefined} style={{cursor:handle?'grab':undefined}} pointerEvents={handle?undefined:'none'}>
     <rect x={x} y={cy-h/2*unit} width={w*unit} height={h*unit} rx={h/2*unit} fill={c} stroke={HALO} strokeWidth={unit}/>
-    <text x={x+w/2*unit} y={cy} dy=".36em" textAnchor="middle" fontSize={PILL_FONT*unit} fontWeight={600} fill="#fff" style={{fontVariantNumeric:'tabular-nums',letterSpacing:'.01em',userSelect:'none'}}>
+    <text x={x+w/2*unit} y={cy} dy=".36em" textAnchor="middle" fontSize={PILL_FONT*unit} fontWeight={500} fontFamily={FONT} fill="#fff" style={{fontVariantNumeric:'tabular-nums',userSelect:'none'}}>
      {lead&&<tspan fillOpacity={.78}>{lead} </tspan>}{text}
     </text>
    </g>
@@ -389,20 +390,19 @@ export default function Stage(props:Props){
   const r=readout(m,state.calibration,formula);
   // En el lienzo solo el valor principal: QTc, lpm y mm quedan en el panel para no tapar el trazado.
   const value=r.value===null?'—':`${r.value} ms`;
-  const mv=rr?amplitudeMV(m,state.calibration):null;
   let d=`M${X1} ${T}V${B}M${X2} ${T}V${B}M${X1} ${Y}H${X2}`;
   if(rr&&m.top!==undefined)d+=`M${Math.min(X1,X2)-ext} ${T}H${Math.max(X1,X2)+ext}`;
   if(rr&&m.bottom!==undefined)d+=`M${Math.min(X1,X2)-ext} ${B}H${Math.max(X1,X2)+ext}`;
+  // Con una medida elegida, las demás quedan bloqueadas: ni se tocan ni se arrastran.
   const dim=!!selected&&!chosen&&!isDraft&&!calibrating;
   const mx=(xa+xb)/2,dir=xb>=xa?1:-1,inner=Math.min(14,gap*.3)*unit,outer=(HIT-14)*unit;
   const jawRect=(x:number,s:number,name:string)=>{
    const a=x-s*outer,b=x+s*inner;
    return <rect key={name} data-handle={name} data-measure={m.id} x={Math.min(a,b)} y={Math.min(T,B)-10*unit} width={Math.abs(b-a)} height={Math.abs(B-T)+20*unit} fill="transparent" style={{cursor:'ew-resize'}}/>;
   };
-  const amp=rr&&mv!==null;
   // Referencias R por debajo de la barra: la píldora del valor ocupa la zona superior.
   const rBot=m.y+H*1.45,rKnob=m.y+H*1.2,rLabel=(x:number,t:string)=>(
-   <text x={x} y={rBot+12*unit} textAnchor="middle" fontSize={10*unit} fontWeight={600} fill={c} stroke={HALO} strokeWidth={3*unit} paintOrder="stroke" pointerEvents="none" style={{userSelect:'none'}}>{t}</text>
+   <text x={x} y={rBot+12*unit} textAnchor="middle" fontSize={10.5*unit} fontWeight={500} fontFamily={FONT} fill={c} stroke={HALO} strokeWidth={3*unit} paintOrder="stroke" pointerEvents="none" style={{userSelect:'none'}}>{t}</text>
   );
   const parts:ReactNode[]=[];
 
@@ -444,7 +444,6 @@ export default function Stage(props:Props){
 
   // Valor: píldora sobre las mordazas; en RR extendido, la amplitud va al costado de la mordaza derecha.
   parts.push(<g key="pill">{pill(mx,Math.min(T,B)-(8+PILL_H/2)*unit,value,c,m.kind,isDraft||calibrating?null:'move',m)}</g>);
-  if(amp)parts.push(<g key="amp">{pill(right+8*unit,((m.top??m.y)+(m.bottom??m.y))/2,`${num(mv!,2)} mV`,c,null,null,m,'start')}</g>);
 
   if(chosen){
    parts.push(knob(m,X1,Y,'x1',c));
@@ -468,7 +467,7 @@ export default function Stage(props:Props){
    }
   }
 
-  return <g key={m.id} data-measure={isDraft?undefined:m.id} opacity={calibrating?.3:dim?.5:1} style={{transition:'opacity .2s'}}>{parts}</g>;
+  return <g key={m.id} data-measure={isDraft?undefined:m.id} opacity={calibrating?.3:dim?.3:1} pointerEvents={dim||calibrating?'none':undefined} style={{transition:'opacity .2s'}}>{parts}</g>;
  }
 
  const showGrid=(calibrating&&calMode==='grid')||gridVisible;
