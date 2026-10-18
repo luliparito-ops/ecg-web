@@ -1,6 +1,6 @@
 import {parseSpeed,latticePitch,gridDeviation,PT_PER_MM} from './pdfvector';
 import {describe,it,expect} from 'vitest';
-import {initialCalibration,scaled,timeMS,corrected,intersection,previousRR,duration,positions,homography,applyH,invertH,orderQuad,quadProblem,axisAligned,quadCalibration,paperToImage,type Measure} from './model';
+import {initialCalibration,scaled,timeMS,corrected,intersection,previousRR,duration,positions,homography,applyH,invertH,orderQuad,quadProblem,axisAligned,quadCalibration,paperToImage,translate,setEdge,normalizeMeasure,amplitudeUnits,amplitudeMM,amplitudeMV,parseGain,gainOf,readout,summary,measuresCSV,copy,type Measure} from './model';
 const c={...initialCalibration(),sx:10,sy:7,confirmed:true};
 describe('Motor ECG',()=>{
  it('convierte distancia sin depender de zoom o escala Y',()=>{expect(timeMS(250,c)).toBe(1000);expect(timeMS(250,{...c,sy:.001})).toBe(1000);});
@@ -44,5 +44,58 @@ describe('Motor ECG',()=>{
   const xs=Array.from({length:60},(_,i)=>10+i*2.88);expect(latticePitch(xs)).toBeCloseTo(2.88);
   expect(latticePitch([1,2,3])).toBeNull();
   expect(gridDeviation(2.88)!).toBeCloseTo(2.88/PT_PER_MM-1,6);expect(Math.abs(gridDeviation(5*PT_PER_MM)!)).toBeLessThan(1e-9);
+ });
+ describe('Calibre RR con amplitud',()=>{
+  const cal={...initialCalibration(),sx:8,sy:8,confirmed:true};
+  const rr=():Measure=>({id:'r',kind:'RR',x1:100,x2:260,y:300,projection:true});
+  it('una medida sin extensión no tiene amplitud ni cambia el tiempo',()=>{
+   const m=rr();expect(amplitudeUnits(m)).toBeNull();expect(amplitudeMM(m,cal)).toBeNull();
+   expect(duration(m,cal)).toBe(800);expect(readout(m,cal,'Bazett').amplitude).toBeNull();
+  });
+  it('mide desde la barra hasta la mordaza extendida (arriba, abajo o ambas)',()=>{
+   const m=rr();setEdge(m,'top',220);expect(amplitudeMM(m,cal)).toBe(10);expect(amplitudeMV(m,cal)).toBe(1);
+   setEdge(m,'bottom',340);expect(amplitudeMM(m,cal)).toBe(15);
+   const only=rr();setEdge(only,'bottom',316);expect(amplitudeMM(only,cal)).toBe(2);
+   expect(duration(m,cal)).toBe(800);
+  });
+  it('usa sy y la ganancia, no sx ni el zoom',()=>{
+   const m=rr();setEdge(m,'top',220);
+   expect(amplitudeMM(m,{...cal,sx:3})).toBe(10);
+   expect(amplitudeMM(m,{...cal,sy:4})).toBe(20);
+   expect(amplitudeMV(m,{...cal,gain:5})).toBe(2);expect(amplitudeMV(m,{...cal,gain:20})).toBe(.5);
+   expect(amplitudeMM(m,{...cal,confirmed:false})).toBeNull();
+  });
+  it('la mordaza no cruza la barra y se retira cerca de ella',()=>{
+   const m=rr();setEdge(m,'top',310);expect(m.top).toBeUndefined();
+   setEdge(m,'top',250);expect(m.top).toBe(250);setEdge(m,'top',297,4);expect(m.top).toBeUndefined();
+   setEdge(m,'bottom',290);expect(m.bottom).toBeUndefined();setEdge(m,'bottom',Number.NaN);expect(m.bottom).toBeUndefined();
+   const q:Measure={...rr(),kind:'QT'};setEdge(q,'top',200);expect(q.top).toBeUndefined();
+  });
+  it('normaliza datos inválidos y medidas antiguas',()=>{
+   expect(normalizeMeasure({...rr(),top:350,bottom:Number.POSITIVE_INFINITY})).toEqual(rr());
+   expect(normalizeMeasure({...rr(),kind:'PR',top:200})).toEqual({...rr(),kind:'PR'});
+   expect(normalizeMeasure({...rr(),top:200,bottom:400})).toEqual({...rr(),top:200,bottom:400});
+  });
+  it('trasladar conserva tiempo y amplitud; copiar (deshacer) conserva la extensión',()=>{
+   const m={...rr(),top:220,bottom:330};translate(m,37,-12);
+   expect(m).toMatchObject({x1:137,x2:297,y:288,top:208,bottom:318});
+   expect(duration(m,cal)).toBe(800);expect(amplitudeMM(m,cal)).toBe(13.75);
+   expect(copy(m)).toEqual(m);
+   const q:Measure={id:'q',kind:'QT',x1:0,x2:100,y:0,projection:false,rrPrevious:-50,rrCurrent:20,tangent:{a:{x:50,y:30},b:{x:75,y:15},base:0}};
+   translate(q,10,5);expect(q.rrPrevious).toBe(-40);expect(q.rrCurrent).toBe(30);expect(q.tangent).toEqual({a:{x:60,y:35},b:{x:85,y:20},base:5});
+  });
+  it('lee la ganancia impresa',()=>{
+   expect(parseGain('25 mm/s  10 mm/mV')).toBe(10);expect(parseGain('5,0 mm / mV')).toBe(5);expect(parseGain('25 mm/s')).toBeNull();
+   expect(gainOf(cal)).toBe(10);expect(gainOf({...cal,gain:20})).toBe(20);expect(gainOf({...cal,gain:-1})).toBe(10);
+  });
+  it('texto de lectura con coma decimal y CSV con columnas de amplitud',()=>{
+   const m={...rr(),top:220,bottom:330};
+   expect(summary(m,cal,'Bazett')).toBe('RR 800 ms · 75 lpm · 13,8 mm · 1,38 mV');
+   const csv=measuresCSV({calibration:cal,measures:[m,{...rr(),id:'p',kind:'PR'}]}).split('\n');
+   expect(csv).toContain('# Ganancia mm/mV,10');
+   const head=csv.find(l=>l.startsWith('"tipo"'))!.split(','),row=csv[csv.length-2].split(',');
+   expect(row[head.indexOf('"amplitud_mm"')]).toBe('"13.75"');expect(row[head.indexOf('"amplitud_mV"')]).toBe('"1.375"');
+   expect(csv[csv.length-1].split(',')[head.indexOf('"amplitud_mm"')]).toBe('""');
+  });
  });
 });

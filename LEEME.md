@@ -35,7 +35,7 @@ Publicá el contenido de `dist` en un alojamiento estático HTTPS. La aplicació
 Esta versión NO incluye service worker, instalación PWA ni funcionamiento offline garantizado. No utiliza analítica, fuentes externas ni CDN de bibliotecas en ejecución; el worker PDF se distribuye con la app.
 
 ## Interfaz
-Lenguaje visual de Apple: modo claro/oscuro automático, materiales translúcidos, símbolos de trazo regular sin etiquetas y amarillo como color de acento. Arriba: abrir, páginas, deshacer, girar, grilla y exportar. Abajo: Medir, Calibrar y Medidas. Calibrar y medir muestran un botón amarillo ✓ para terminar.
+Lenguaje visual de Apple: modo claro/oscuro automático, materiales translúcidos, símbolos de trazo regular sin etiquetas y amarillo como color de acento. Arriba: abrir, páginas, deshacer, girar, grilla y exportar. Abajo: Medir, Calibrar y Medidas. Calibrar y medir muestran un botón amarillo ✓ para terminar. Calibrar incluye velocidad (mm/s) y ganancia (mm/mV).
 
 ## 1. Calibración
 **Método de 4 puntos (por defecto en imágenes y fotos).** Tocá las 4 esquinas de un cuadrado de 25 mm (5×5 cuadros grandes), en sentido horario desde arriba a la izquierda. Cada esquina se arrastra para afinarla (aparece la lupa) y una malla de verificación muestra cómo se proyecta el cuadrado sobre el papel. Al confirmar: si el cuadrado ya está recto (capturas de pantalla) solo se fija la escala por eje; si no (fotos con perspectiva o giro), la imagen se endereza por homografía y se calibra sobre la imagen corregida. Volver a calibrar parte siempre del original. Enderezar descarta medidas previas. La precisión depende de cuántos píxeles ocupe 1 mm en la foto: con ~4 px/mm el error de un clic es de ~0,5 %. Límite de salida 4096 px por lado / 12 MP.
@@ -56,7 +56,11 @@ No infiere escala por tamaño de página PDF ni detecta automáticamente cuadrí
 ## 2. Navegar y medir
 Fuera de calibración, dos dedos siempre navegan: zoom + desplazamiento del lienzo completo. Con Mover lienzo (Opciones), un dedo también navega. Seleccioná PR/QRS/QT y arrastrá sobre el documento para crear. Para crear otro del mismo tipo volvé a elegirlo. RR tiene acceso directo.
 
-Tocá una medida para seleccionarla: aparecen controles. Arrastrá extremos, barra o etiqueta. Un toque sobre una medida abre su panel. Dos dedos durante edición terminan la edición actual y pasan a navegación. Si el sistema cancela el gesto de un dedo, se restaura su estado previo.
+Tocá una medida para seleccionarla: aparecen manijas discretas (la zona táctil es de 44 pt aunque se vean pequeñas). Arrastrá las mordazas para cambiar la apertura y la barra o la píldora del valor para mover el calibre; la edición es relativa, la manija no salta al dedo.
+
+**Panel de medida.** Una sola fila con el valor (cifras tabulares, ancho estable), mover ±1 ms, largo ±1 ms y eliminar. Debajo, solo en QT y RR, las acciones propias: fórmula de QTc, R y R ant. (un punto indica que ya están marcadas; después de tocar el ECG se vuelve a editar), tangente y su ángulo; en RR, proyección y amplitud. En pantallas anchas todo va en una fila.
+
+**Trazos.** Líneas de grosor constante en pantalla (2 px físicos las principales, 1 px las auxiliares: proyecciones, referencias R, base de la tangente) con un halo claro para leerse sobre papel rosado o blanco, alineadas a los píxeles físicos. En el lienzo la píldora solo muestra el valor principal; QTc, lpm y mm quedan en el panel. Un toque sobre una medida abre su panel. Dos dedos durante edición terminan la edición actual y pasan a navegación. Si el sistema cancela el gesto de un dedo, se restaura su estado previo.
 
 Con mouse: rueda amplía el lienzo; durante calibración cambia la escala del eje elegido. Arrastrar funciona igual que con un dedo.
 
@@ -66,11 +70,13 @@ Las flechas desplazan la medida seleccionada: paso horizontal de 1 ms (Shift 10 
 
 En dispositivos táctiles, girar a horizontal cambia la orientación de ECG + anotaciones como grupo. En escritorio no se gira automáticamente por tener una ventana horizontal. Botones y paneles se mantienen legibles. El ajuste de vista puede cambiar el tamaño visible al rotar, pero no la calibración. El botón × Ajustar restablece la vista.
 
-## 3. RR
-Al crear RR, las proyecciones aparecen durante el arrastre. Extremos cambian apertura; barra mueve conjunto. La proyección no se adapta a QRS ni detecta latidos. Si hay más de 1500 marcas potenciales se omiten por seguridad de rendimiento; ampliá la apertura.
+## 3. RR (calibre de tiempo y amplitud)
+Al crear RR, las proyecciones aparecen durante el arrastre. Extremos cambian apertura; barra o píldora del valor mueven el conjunto.
+
+**Amplitud.** Con el RR seleccionado aparecen dos manijas más, arriba y abajo en el centro del calibre. Arrastralas para extender las mordazas en vertical: la barra horizontal es la referencia (p. ej. la isoeléctrica). Solo arriba mide de la barra al borde superior (onda R); solo abajo, de la barra al inferior (S); con ambas, de borde a borde (pico a pico). Se informa en mm (con la escala vertical `sy` de la calibración) y en mV con la ganancia: 10 mm/mV por defecto, la leída del PDF («10 mm/mV») o la elegida en Calibrar (5, 10 o 20). Volver a llevar una manija hasta la barra, o tocar × en el panel, retira la extensión. El tiempo, la frecuencia y la proyección no cambian. Las flechas y el movimiento fino trasladan también la extensión; el CSV agrega las columnas `amplitud_mm` y `amplitud_mV` y la ganancia en el encabezado. La proyección no se adapta a QRS ni detecta latidos. Si hay más de 1500 marcas potenciales se omiten por seguridad de rendimiento; ampliá la apertura.
 
 ## 4. QT y QTc
-Creá un QT directo de inicio QRS a fin T. Seleccionalo y marcá R del QT y luego R anterior con sus botones; tocá el ECG para colocar cada referencia. Los controles celestes permiten corregir ambas marcas.
+Creá un QT directo de inicio QRS a fin T. Seleccionalo y marcá R del QT y luego R anterior con sus botones; tocá el ECG para colocar cada referencia. Las referencias se dibujan por debajo del calibre y sus manijas permiten corregirlas.
 
 QTc usa EXCLUSIVAMENTE esas referencias propias del QT. No usa el calibre RR de regularidad. Se exige que R actual sea posterior a R anterior y esté dentro del intervalo QT. Falta de referencias o intersección inválida produce QTc pendiente. La selección correcta de las dos R, incluida su consecutividad y adecuación clínica, depende del usuario: no se detecta automáticamente.
 
@@ -102,7 +108,7 @@ No guardar sesiones antes de cargar una página completamente renderizada. El ar
 ## Estructura
 src/model.ts: cálculos puros y transformaciones de grilla.
 src/Stage.tsx: lienzo, gestos, grilla, calibres y lupa.
-src/App.tsx: herramientas, referencias, sesiones y paneles.
+src/App.tsx: herramientas, referencias y paneles.
 src/PDFLayer.tsx: render PDF local con control de resolución.
 src/documents.ts: apertura y exportación.
 src/gridfinder.ts: detección automática de grilla. src/rectify.ts: enderezado por homografía. src/pdfvector.ts: escala y velocidad de PDF. src/autogrid.ts: lectura de píxeles. src/*.test.ts: cálculo, geometría y detección.

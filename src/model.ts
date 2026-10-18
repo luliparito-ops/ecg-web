@@ -1,9 +1,11 @@
 export type Point = {x:number;y:number};
-export type Calibration = {sx:number;sy:number;x:number;y:number;speed:number;confirmed:boolean};
+/** sx/sy: unidades del documento por mm. gain: mm/mV impresos (10 si no se indica). */
+export type Calibration = {sx:number;sy:number;x:number;y:number;speed:number;confirmed:boolean;gain?:number};
 export type Kind = 'PR'|'QRS'|'QT'|'RR';
 export type Formula = 'Bazett'|'Fridericia'|'Framingham'|'Hodges';
 export type Axis = 'x'|'y'|'both';
-export type Measure = {id:string;kind:Kind;x1:number;x2:number;y:number;projection:boolean;rrPrevious?:number;rrCurrent?:number;tangent?:{a:Point;b:Point;base:number}};
+/** Calibre. y es la barra horizontal; en RR, top/bottom (coordenadas del documento) extienden las mordazas para medir amplitud. */
+export type Measure = {id:string;kind:Kind;x1:number;x2:number;y:number;projection:boolean;rrPrevious?:number;rrCurrent?:number;tangent?:{a:Point;b:Point;base:number};top?:number;bottom?:number};
 export type State = {calibration:Calibration;measures:Measure[]};
 export const initialCalibration=():Calibration=>({sx:8,sy:8,x:0,y:0,speed:25,confirmed:false});
 export const MIN=0.0001,MAX=100000;
@@ -15,6 +17,14 @@ export function scaled(g:Calibration,ratio:number,m0:Point,m1:Point,axis:Axis):C
  if(axis==='both'){const r=clamp(ratio,Math.max(MIN/sx,MIN/sy),Math.min(MAX/sx,MAX/sy));sx*=r;sy*=r;}
  else if(axis==='x')sx=clamp(sx*ratio,MIN,MAX);else sy=clamp(sy*ratio,MIN,MAX);
  return {...g,sx,sy,x:m1.x-(m0.x-g.x)*(sx/g.sx),y:m1.y-(m0.y-g.y)*(sy/g.sy)};
+}
+export const DEFAULT_GAIN=10;
+export const gainOf=(c:Calibration)=>c.gain!==undefined&&Number.isFinite(c.gain)&&c.gain>0&&c.gain<=1000?c.gain:DEFAULT_GAIN;
+/** Ganancia impresa («10 mm/mV», «5,0 mm / mV»). */
+export function parseGain(text:string):number|null{
+ const m=/(\d+(?:[.,]\d+)?)\s*mm\s*\/\s*mV\b/i.exec(text);
+ const v=m?Number(m[1].replace(',','.')):NaN;
+ return Number.isFinite(v)&&v>0&&v<=1000?v:null;
 }
 export function timeMS(distance:number,c:Calibration):number|null {return c.confirmed&&validCalibration(c)?Math.abs(distance)/c.sx/c.speed*1000:null;}
 export function intersection(m:Measure):number|null {
@@ -46,11 +56,70 @@ export function positions(start:number,step:number,width:number):number[]{
  if(hi<lo||hi-lo>1500)return [];
  return Array.from({length:hi-lo+1},(_,i)=>start+(lo+i)*step);
 }
+/** Traslada el calibre completo (mordazas, barra, extensión vertical, tangente y referencias R). */
+export function translate(m:Measure,dx:number,dy:number):void{
+ m.x1+=dx;m.x2+=dx;m.y+=dy;
+ if(m.top!==undefined)m.top+=dy;
+ if(m.bottom!==undefined)m.bottom+=dy;
+ if(m.tangent){m.tangent.a.x+=dx;m.tangent.b.x+=dx;m.tangent.a.y+=dy;m.tangent.b.y+=dy;m.tangent.base+=dy;}
+ if(m.rrPrevious!==undefined)m.rrPrevious+=dx;
+ if(m.rrCurrent!==undefined)m.rrCurrent+=dx;
+}
+/**
+ * Extiende la mordaza superior o inferior de un RR hasta y. Nunca cruza la barra:
+ * si queda a menos de `min` unidades de ella, la extensión se retira.
+ */
+export function setEdge(m:Measure,edge:'top'|'bottom',y:number,min=0):void{
+ if(m.kind!=='RR'||!Number.isFinite(y))return;
+ const d=edge==='top'?m.y-y:y-m.y;
+ if(d<=Math.max(0,min))delete m[edge];else m[edge]=y;
+}
+/** Quita extensiones inválidas (no numéricas, del lado equivocado o en medidas que no son RR). */
+export function normalizeMeasure(m:Measure):Measure{
+ if(m.kind!=='RR'){delete m.top;delete m.bottom;return m;}
+ if(m.top!==undefined&&!(Number.isFinite(m.top)&&m.top<m.y))delete m.top;
+ if(m.bottom!==undefined&&!(Number.isFinite(m.bottom)&&m.bottom>m.y))delete m.bottom;
+ return m;
+}
+/** Distancia vertical medida (unidades del documento): de la mordaza superior a la inferior, o a la barra si solo hay una. */
+export function amplitudeUnits(m:Measure):number|null{
+ if(m.kind!=='RR'||(m.top===undefined&&m.bottom===undefined))return null;
+ const d=(m.bottom??m.y)-(m.top??m.y);
+ return Number.isFinite(d)&&d>0?d:null;
+}
+export function amplitudeMM(m:Measure,c:Calibration):number|null{
+ const u=amplitudeUnits(m);
+ return u!==null&&c.confirmed&&validCalibration(c)?u/c.sy:null;
+}
+export function amplitudeMV(m:Measure,c:Calibration):number|null{
+ const mm=amplitudeMM(m,c);return mm===null?null:mm/gainOf(c);
+}
+/** Número con coma decimal (español). */
+export const num=(n:number,d=0)=>n.toFixed(d).replace('.',',');
+export type Readout={kind:Kind;value:string|null;hint:string|null;secondary:string|null;amplitude:string|null};
+export function readout(m:Measure,c:Calibration,f:Formula):Readout{
+ const t=duration(m,c),mm=amplitudeMM(m,c),mv=amplitudeMV(m,c);
+ const amplitude=mm===null||mv===null?null:`${num(mm,1)} mm · ${num(mv,2)} mV`;
+ if(t===null)return {kind:m.kind,value:null,hint:c.confirmed?'revisar referencias':'sin calibrar',secondary:null,amplitude};
+ let secondary:string|null=null;
+ if(m.kind==='RR'&&t>0)secondary=`${num(60000/t)} lpm`;
+ if(m.kind==='QT'){const r=previousRR(m,c),q=r===null?null:corrected(t,r,f);secondary=q===null?'QTc —':`QTc ${num(q)} ms`;}
+ return {kind:m.kind,value:num(t),hint:null,secondary,amplitude};
+}
 export function summary(m:Measure,c:Calibration,f:Formula):string {
- const t=duration(m,c);if(t===null)return `${m.kind} · ${c.confirmed?'revisar referencias':'sin calibrar'}`;
- if(m.kind==='RR')return `RR ${t.toFixed(0)} ms${t>0?' · '+(60000/t).toFixed(0)+' lpm':''}`;
- if(m.kind==='QT'){const r=previousRR(m,c),q=r===null?null:corrected(t,r,f);return `QT ${t.toFixed(0)} ms · ${q===null?'QTc pendiente':'QTc '+q.toFixed(0)+' ms'}`;}
- return `${m.kind} ${t.toFixed(0)} ms`;
+ const r=readout(m,c,f);
+ return [r.value===null?`${m.kind} · ${r.hint}`:`${m.kind} ${r.value} ms`,r.secondary,r.amplitude].filter(Boolean).join(' · ');
+}
+export const FORMULAS:Formula[]=['Bazett','Fridericia','Framingham','Hodges'];
+/** CSV de medidas: valores numéricos con punto decimal, sin redondear. */
+export function measuresCSV(s:State):string{
+ const c=s.calibration;
+ const rows=[['tipo','inicio_u','fin_u','intervalo_ms','RR_previo_ms',...FORMULAS,'amplitud_mm','amplitud_mV','metodo'],...s.measures.map(m=>{
+  const t=duration(m,c),r=previousRR(m,c);
+  return [m.kind,m.x1,intersection(m)??'',t??'',r??'',...FORMULAS.map(f=>m.kind==='QT'&&t!==null&&r!==null?corrected(t,r,f)??'':''),amplitudeMM(m,c)??'',amplitudeMV(m,c)??'',m.tangent?'tangente':'directo'];
+ })];
+ const escape=(x:unknown)=>'"'+String(x).replaceAll('"','""')+'"';
+ return `# Medidas ECG Web\n# Velocidad mm/s,${c.speed}\n# Ganancia mm/mV,${gainOf(c)}\n# Escala X,${c.sx}\n# Escala Y,${c.sy}\n`+rows.map(r=>r.map(escape).join(',')).join('\n');
 }
 
 /* Calibración por 4 puntos: el cuadrado de SQUARE_MM del papel se marca en sentido horario desde arriba a la izquierda. */

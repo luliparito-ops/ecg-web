@@ -17,3 +17,9 @@ export async function loadDocument(file:File):Promise<DocumentData>{
  }catch(e){URL.revokeObjectURL(url);throw e;}
 }
 export function download(name:string,data:string,type:string){const url=URL.createObjectURL(new Blob([data],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),3000);}
+/** Texto de la página actual de un PDF (vacío en imágenes). */
+export async function pageText(d:DocumentData):Promise<string>{
+ if(!d.pdf)return '';
+ const pg=await d.pdf.getPage(d.page);
+ return (await pg.getTextContent()).items.map(t=>'str' in t?t.str:'').join(' ');
+}

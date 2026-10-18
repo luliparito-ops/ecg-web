@@ -1,17 +1,41 @@
-import {useCallback,useEffect,useRef,useState} from 'react';
-import {Button} from 'react-aria-components';
-import Stage,{type Tool} from './Stage';
+import {createContext,useCallback,useContext,useEffect,useRef,useState,type CSSProperties} from 'react';
+import Stage,{KIND_COLOR,type Tool} from './Stage';
 import Icon from './Icons';
-import {loadDocument,download,type DocumentData} from './documents';
-import {copy,scaled,validCalibration,initialCalibration,summary,duration,previousRR,corrected,intersection,orderQuad,quadProblem,axisAligned,quadCalibration,SQUARE_MM,type Point,type State,type Axis,type Kind,type Formula,type Measure} from './model';
+import {loadDocument,download,pageText,type DocumentData} from './documents';
+import {copy,scaled,validCalibration,initialCalibration,readout,translate,measuresCSV,parseGain,gainOf,FORMULAS,orderQuad,quadProblem,axisAligned,quadCalibration,SQUARE_MM,type Point,type State,type Axis,type Kind,type Formula,type Measure} from './model';
 import {rectify} from './rectify';
 import {detectDocument} from './autogrid';
 import {pageScale,gridDeviation,PT_PER_MM} from './pdfvector';
 
 type ActiveBar='main'|'measure'|'cal';
 type ModalSheet='records'|null;
-const formulas:Formula[]=['Bazett','Fridericia','Framingham','Hodges'];
+const KINDS:Kind[]=['PR','QRS','QT','RR'];
+const SPEEDS=['25','50'],GAINS=['5','10','20'];
 const newState=():State=>({calibration:initialCalibration(),measures:[]});
+const Busy=createContext(false);
+
+/** Botón de símbolo: 44 pt de objetivo, etiqueta accesible y tooltip en escritorio. Fuera de App para no remontarse en cada render. */
+function Btn({icon,label,onPress,active=false,disabled=false,className=''}:{icon:string;label:string;onPress:()=>void;active?:boolean;disabled?:boolean;className?:string}){
+ const busy=useContext(Busy);
+ return (
+  <button type="button" aria-label={label} title={label} aria-pressed={active||undefined} className={'sf-btn '+className+(active?' on':'')} onClick={onPress} disabled={disabled||busy}>
+   <Icon name={icon}/>
+  </button>
+ );
+}
+/** Selector compacto con el control nativo (rueda en iOS, menú en escritorio). */
+function PillSelect({label,value,options,onChange,suffix}:{label:string;value:string;options:string[];onChange:(v:string)=>void;suffix?:string}){
+ const list=options.includes(value)?options:[...options,value];
+ return (
+  <label className="pill-select" title={label}>
+   <select aria-label={label} value={value} onChange={e=>onChange(e.target.value)}>
+    {list.map(o=><option key={o} value={o}>{o.replace('.',',')}{suffix?' '+suffix:''}</option>)}
+   </select>
+   <span aria-hidden="true">{value.replace('.',',')}{suffix&&<small>{suffix}</small>}</span>
+   <Icon name="chevronUpDown"/>
+  </label>
+ );
+}
 
 export default function App(){
  const [doc,setDoc]=useState<DocumentData|null>(null);
@@ -28,6 +52,7 @@ export default function App(){
  const [notice,setNotice]=useState('');
  const [busy,setBusy]=useState(false);
  const [speedText,setSpeedText]=useState('25');
+ const [gainText,setGainText]=useState('10');
 
  const stateRef=useRef(state);stateRef.current=state;
  const docRef=useRef(doc);docRef.current=doc;
@@ -48,7 +73,7 @@ export default function App(){
  const notify=useCallback((s:string)=>{
   setNotice(s);
   if(noticeTimer.current)clearTimeout(noticeTimer.current);
-  noticeTimer.current=setTimeout(()=>setNotice(''),6500);
+  noticeTimer.current=setTimeout(()=>setNotice(''),Math.min(6000,Math.max(2600,1500+s.length*45)));
  },[]);
 
  useEffect(()=>()=>{if(noticeTimer.current)clearTimeout(noticeTimer.current);},[]);
@@ -95,10 +120,11 @@ export default function App(){
   if(doc.original){setDoc(doc.original);change(newState());}
   setAxis('x');
   setSpeedText(String(stateRef.current.calibration.speed||25));
+  setGainText(String(gainOf(stateRef.current.calibration)));
   setTool('move');
   setActiveBar('cal');
   setModal(null);
-  notify(fromPhoto?'Tocá las 4 esquinas del cuadrado de 25 mm, en sentido horario desde arriba a la izquierda':'Un dedo mueve la grilla · dos dedos la escalan');
+  notify(fromPhoto?'Tocá las 4 esquinas de un cuadrado de 25 mm, desde arriba a la izquierda':'Un dedo mueve la grilla · dos dedos la escalan');
   if(fromPhoto)void suggestQuad(doc.original??doc);
  }
 
@@ -139,7 +165,7 @@ export default function App(){
  function modeChange(mode:'grid'|'quad'){
   setCalMode(mode);
   setCalQuad([]);
-  notify(mode==='quad'?'Tocá las 4 esquinas del cuadrado de 25 mm, en sentido horario desde arriba a la izquierda':'Un dedo mueve la grilla · dos dedos la escalan');
+  notify(mode==='quad'?'Tocá las 4 esquinas de un cuadrado de 25 mm, desde arriba a la izquierda':'Un dedo mueve la grilla · dos dedos la escalan');
  }
 
  function finishCalibration(next:State,newDoc?:DocumentData){
@@ -153,8 +179,9 @@ export default function App(){
  }
 
  async function applyCalibration(){
-  const speed=Number(speedText);
+  const speed=Number(speedText),gain=Number(gainText);
   if(!Number.isFinite(speed)||speed<=0||speed>1000){notify('Indicá una velocidad válida.');return;}
+  if(!Number.isFinite(gain)||gain<=0||gain>1000){notify('Indicá una ganancia válida.');return;}
   if(calMode==='quad'){
    if(calQuad.length<4){notify('Marcá las 4 esquinas.');return;}
    const q=orderQuad(calQuad),problem=quadProblem(q);
@@ -163,6 +190,7 @@ export default function App(){
    setBusy(true);
    try{
     const r=await calibrateQuad(doc,q,speed,stateRef.current.measures);
+    r.state.calibration.gain=gain;
     finishCalibration(r.state,r.doc);
     notify(r.doc?'Imagen enderezada y calibrada.':'Calibrado.');
    }catch(e){
@@ -172,7 +200,7 @@ export default function App(){
    }
    return;
   }
-  const c={...stateRef.current.calibration,speed,confirmed:true};
+  const c={...stateRef.current.calibration,speed,gain,confirmed:true};
   if(!validCalibration(c)){notify('Escala inválida.');return;}
   finishCalibration({...stateRef.current,calibration:c});
   notify('Calibrado.');
@@ -216,12 +244,7 @@ export default function App(){
   const dx=(deltaMS/1000)*sx*speed;
   commit(s=>{
    const mm=s.measures.find(x=>x.id===m.id);
-   if(mm){
-    mm.x1+=dx;mm.x2+=dx;
-    if(mm.tangent){mm.tangent.a.x+=dx;mm.tangent.b.x+=dx;}
-    if(mm.rrPrevious!==undefined)mm.rrPrevious+=dx;
-    if(mm.rrCurrent!==undefined)mm.rrCurrent+=dx;
-   }
+   if(mm)translate(mm,dx,0);
    return s;
   });
  }
@@ -247,7 +270,7 @@ export default function App(){
   setTool(kind);
   setSelected(null);
   setActiveBar('measure');
-  notify(`Modo ${kind}: arrastrá sobre el ECG para medir.`);
+  notify(`${kind}: arrastrá sobre el trazado`);
  }
 
  function selectMeasure(id:string|null){
@@ -260,13 +283,14 @@ export default function App(){
 
  /** PDF: escala física del papel y velocidad impresa; avisa si la grilla dibujada no coincide. */
  async function autoCalibrate(d:DocumentData):Promise<{state:State;message:string}>{
-  let speed:number|null=null,pitch:number|null=null;
+  let speed:number|null=null,pitch:number|null=null,gain:number|null=null;
   try{({speed,pitch}=await pageScale(d));}catch{/* sin lectura vectorial: se usa la escala física con 25 mm/s */}
+  try{gain=parseGain(await pageText(d));}catch{/* sin texto: 10 mm/mV */}
   const v=speed??25,dev=pitch?gridDeviation(pitch):null;
-  const warn=dev!==null&&Math.abs(dev)>.005?` · la grilla del PDF difiere ${dev>0?'+':''}${(dev*100).toFixed(1)} %, verificá`:'';
+  const warn=dev!==null&&Math.abs(dev)>.005?` · la grilla del PDF difiere ${dev>0?'+':''}${(dev*100).toFixed(1).replace('.',',')} %, verificá`:'';
   return {
-   state:{calibration:{sx:PT_PER_MM,sy:PT_PER_MM,x:0,y:0,speed:v,confirmed:true},measures:[]},
-   message:`Calibrado · ${v} mm/s${speed?'':' (supuesta)'}${warn}`
+   state:{calibration:{sx:PT_PER_MM,sy:PT_PER_MM,x:0,y:0,speed:v,confirmed:true,...(gain?{gain}:{})},measures:[]},
+   message:`Calibrado · ${String(v).replace('.',',')} mm/s${speed?'':' (supuesta)'}${gain?` · ${String(gain).replace('.',',')} mm/mV`:''}${warn}`
   };
  }
 
@@ -326,21 +350,15 @@ export default function App(){
 
  function csv(){
   if(!doc||!allowed())return;
-  const c=state.calibration;
-  const rows=[['tipo','inicio_u','fin_u','intervalo_ms','RR_previo_ms',...formulas,'metodo'],...state.measures.map(m=>{
-   const t=duration(m,c),r=previousRR(m,c);
-   return [m.kind,m.x1,intersection(m)??'',t??'',r??'',...formulas.map(f=>m.kind==='QT'&&t!==null&&r!==null?corrected(t,r,f)??'':''),m.tangent?'tangente':'directo'];
-  })];
-  const escape=(x:unknown)=>'"'+String(x).replaceAll('"','""')+'"';
-  download('medidas-ecg.csv',`# Medidas ECG Web\n# Velocidad mm/s,${c.speed}\n# Escala X,${c.sx}\n# Escala Y visual,${c.sy}\n`+rows.map(r=>r.map(escape).join(',')).join('\n'),'text/csv;charset=utf-8');
-  notify('CSV descargado con éxito.');
+  download('medidas-ecg.csv',measuresCSV(state),'text/csv;charset=utf-8');
+  notify('CSV descargado');
  }
 
  function tangent(){
   if(!m||m.kind!=='QT')return;
   const w=Math.max(1,Math.abs(m.x2-m.x1));
   updateMeasure(x=>{x.tangent={a:{x:x.x2-w*.3,y:x.y-w*.25},b:{x:x.x2,y:x.y},base:x.y};});
-  notify('Tangente activada: arrastrá la recta para inclinar y la línea base para nivelar.');
+  notify('Arrastrá la recta sobre la pendiente de T y la base hasta la isoeléctrica');
  }
 
  function angleChange(degrees:number){
@@ -355,19 +373,47 @@ export default function App(){
  }
 
 
- const Btn=({icon,label,onPress,active=false,disabled=false,className=''}:{icon:string;label:string;onPress:()=>void;active?:boolean;disabled?:boolean;className?:string})=>(
-  <button type="button" aria-label={label} title={label} className={'sf-btn '+className+(active?' on':'')} onClick={onPress} disabled={disabled||busy}>
-   <Icon name={icon}/>
-  </button>
- );
-
  const done=(fn:()=>void,label:string)=>(
   <button type="button" aria-label={label} title={label} className="done-btn" onClick={fn}><Icon name="check"/></button>
  );
 
  const angle=m?.tangent?Math.atan2(m.tangent.b.y-m.tangent.a.y,m.tangent.b.x-m.tangent.a.x)*180/Math.PI:0;
+ const r=m?readout(m,state.calibration,formula):null;
+ const removeMeasure=()=>{if(!m)return;commit(s=>({...s,measures:s.measures.filter(x=>x.id!==m.id)}));setSelected(null);};
+
+ const context=m&&m.kind==='QT'?(
+  <>
+   <PillSelect label="Fórmula de QTc" value={formula} options={FORMULAS} onChange={v=>setFormula(v as Formula)}/>
+   <div className="chips" role="group" aria-label="Referencias R para QTc">
+    {([['current','R','R de este QT',m.rrCurrent],['previous','R ant.','R anterior',m.rrPrevious]] as const).map(([t,txt,label,v])=>(
+     <button key={t} type="button" aria-label={label} title={label} aria-pressed={tool===t} className={'chip'+(tool===t?' on':'')+(v!==undefined?' set':'')} onClick={()=>{setTool(tool===t?'move':t);if(tool!==t)notify(t==='current'?'Tocá la R de este QT':'Tocá la R anterior');}}>{txt}</button>
+    ))}
+   </div>
+   <Btn icon="tangent" label={m.tangent?'Quitar tangente':'Tangente de T'} active={!!m.tangent} onPress={()=>m.tangent?updateMeasure(mm=>{delete mm.tangent;}):tangent()}/>
+   {m.tangent&&(
+    <label className="angle" title="Ángulo de la tangente">
+     <input type="range" min="-179" max="179" step=".5" value={angle} aria-label="Ángulo de la tangente" onChange={e=>angleChange(+e.target.value)}/>
+     <span>{angle.toFixed(1).replace('.',',')}°</span>
+    </label>
+   )}
+  </>
+ ):m&&m.kind==='RR'?(
+  <>
+   <Btn icon="projection" label={m.projection?'Ocultar proyección':'Proyectar intervalo'} active={m.projection} onPress={()=>updateMeasure(mm=>{mm.projection=!mm.projection;})}/>
+   {r?.amplitude?(
+    <span className="amp">
+     <Icon name="arrowY"/>
+     <span>{r.amplitude}</span>
+     <button type="button" className="amp-clear" aria-label="Quitar amplitud" title="Quitar amplitud" onClick={()=>updateMeasure(mm=>{delete mm.top;delete mm.bottom;})}><Icon name="close"/></button>
+    </span>
+   ):(
+    <span className="amp hint"><Icon name="arrowY"/><span>Arrastrá arriba o abajo para amplitud</span></span>
+   )}
+  </>
+ ):null;
 
  return (
+  <Busy.Provider value={busy}>
   <main className="app" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();const f=e.dataTransfer.files?.[0];if(f)void openFile(f);}}>
    {doc?(
     <Stage
@@ -388,13 +434,17 @@ export default function App(){
      onCommit={record}
      onSelect={selectMeasure}
      onNotice={notify}
+     onMarked={()=>setTool('move')}
     />
    ):(
     <div className="empty">
-     <Button className="open-hero" aria-label="Abrir imagen o PDF" onPress={()=>fileInput.current?.click()}>
+     <button type="button" className="open-hero" aria-label="Abrir imagen o PDF" onClick={()=>fileInput.current?.click()}>
       <Icon name="photo"/>
-     </Button>
-     <p>Abrí, soltá o pegá un ECG</p>
+     </button>
+     <div className="empty-text">
+      <p>Abrí un ECG</p>
+      <small>Foto, captura o PDF · también podés soltarlo o pegarlo</small>
+     </div>
     </div>
    )}
 
@@ -403,13 +453,16 @@ export default function App(){
    {doc&&(
     <header className="top-bar">
      {activeBar==='cal'?(
-      <>
-       <div className="bar-group">{done(()=>void applyCalibration(),'Listo')}{<Btn icon="close" label="Cancelar" className="plain" onPress={cancelCalibration}/>}</div>
-      </>
+      <div className="bar-group">{done(()=>void applyCalibration(),'Listo')}<div className="capsule glass"><Btn icon="close" label="Cancelar" className="plain" onPress={cancelCalibration}/></div></div>
      ):activeBar==='measure'?(
       <>
        <div className="bar-group">{done(()=>{setTool('move');setSelected(null);setActiveBar('main');},'Listo')}</div>
-       {canUndo&&<div className="capsule glass"><Btn icon="undo" label="Deshacer" onPress={undo}/></div>}
+       {(canUndo||canRedo)&&(
+        <div className="capsule glass">
+         <Btn icon="undo" label="Deshacer" disabled={!canUndo} onPress={undo}/>
+         <Btn icon="redo" label="Rehacer" disabled={!canRedo} onPress={redo}/>
+        </div>
+       )}
       </>
      ):(
       <>
@@ -426,8 +479,8 @@ export default function App(){
        <div className="bar-group">
         {(canUndo||canRedo)&&(
          <div className="capsule glass">
-          {canUndo&&<Btn icon="undo" label="Deshacer" onPress={undo}/>}
-          {canRedo&&<Btn icon="redo" label="Rehacer" onPress={redo}/>}
+          <Btn icon="undo" label="Deshacer" disabled={!canUndo} onPress={undo}/>
+          <Btn icon="redo" label="Rehacer" disabled={!canRedo} onPress={redo}/>
          </div>
         )}
         <div className="capsule glass">
@@ -441,7 +494,7 @@ export default function App(){
     </header>
    )}
 
-   {notice&&<div className="toast glass" role="status">{notice}</div>}
+   {notice&&<div key={notice} className="toast glass" role="status">{notice}</div>}
    {busy&&<div className="spinner" role="status" aria-label="Procesando"/>}
 
    {doc&&(
@@ -461,85 +514,72 @@ export default function App(){
 
      {activeBar==='cal'&&(
       <nav className="card glass cal-card" aria-label="Calibración">
-       <div className="segmented" role="group" aria-label="Método">
-        <button type="button" aria-label="Grilla" title="Grilla" className={'seg'+(calMode==='grid'?' on':'')} onClick={()=>modeChange('grid')}><Icon name="grid"/></button>
-        <button type="button" aria-label="4 puntos" title="4 puntos" className={'seg'+(calMode==='quad'?' on':'')} onClick={()=>modeChange('quad')}><Icon name="quad"/></button>
-       </div>
-       {calMode==='grid'&&(
-        <div className="segmented" role="group" aria-label="Eje">
-         {([['both','arrowBoth','Ambos ejes'],['x','arrowX','Tiempo'],['y','arrowY','Amplitud']] as const).map(([a,ic,label])=>(
-          <button type="button" key={a} aria-label={label} title={label} className={'seg'+(axis===a?' on':'')} onClick={()=>setAxis(a)}><Icon name={ic}/></button>
-         ))}
+       <div className="cal-row">
+        <div className="segmented" role="group" aria-label="Método">
+         <button type="button" aria-label="Grilla" title="Grilla" aria-pressed={calMode==='grid'} className={'seg'+(calMode==='grid'?' on':'')} onClick={()=>modeChange('grid')}><Icon name="grid"/></button>
+         <button type="button" aria-label="4 puntos" title="4 puntos" aria-pressed={calMode==='quad'} className={'seg'+(calMode==='quad'?' on':'')} onClick={()=>modeChange('quad')}><Icon name="quad"/></button>
         </div>
-       )}
-       <div className="segmented" role="group" aria-label="Velocidad">
-        {['25','50'].map(v=>(
-         <Button key={v} className={'seg txt'+(speedText===v?' on':'')} onPress={()=>setSpeedText(v)}>{v}<small>mm/s</small></Button>
-        ))}
-       </div>
-       {calMode==='grid'?(
-        <>
-         <div className="stepper">
-          <Btn icon="minus" label="Reducir escala" onPress={()=>nudge(.98)}/>
-          <Btn icon="plus" label="Aumentar escala" onPress={()=>nudge(1.02)}/>
+        {calMode==='grid'?(
+         <div className="segmented" role="group" aria-label="Eje">
+          {([['both','arrowBoth','Ambos ejes'],['x','arrowX','Tiempo'],['y','arrowY','Amplitud']] as const).map(([a,ic,label])=>(
+           <button type="button" key={a} aria-label={label} title={label} aria-pressed={axis===a} className={'seg'+(axis===a?' on':'')} onClick={()=>setAxis(a)}><Icon name={ic}/></button>
+          ))}
          </div>
-         <label className="opacity" title="Opacidad de la grilla">
-          <Icon name="opacity"/>
-          <input type="range" min=".1" max=".9" step=".02" value={opacity} onChange={e=>setOpacity(+e.target.value)}/>
-         </label>
-        </>
-       ):(
-        <div className="quad-count">
-         <Btn icon="auto" label="Detectar grilla" onPress={()=>{if(docRef.current)void suggestQuad(docRef.current);}}/>
-         <span>{calQuad.length}/4</span>
-         <Btn icon="trash" label="Borrar puntos" disabled={!calQuad.length} className="danger" onPress={()=>setCalQuad([])}/>
-        </div>
-       )}
+        ):(
+         <div className="quad-count">
+          <Btn icon="auto" label="Detectar grilla" onPress={()=>{if(docRef.current)void suggestQuad(docRef.current);}}/>
+          <span aria-label={`${calQuad.length} de 4 esquinas`}>{calQuad.length}<small>/4</small></span>
+          <Btn icon="trash" label="Borrar puntos" disabled={!calQuad.length} className="danger" onPress={()=>setCalQuad([])}/>
+         </div>
+        )}
+       </div>
+       <div className="cal-row">
+        <PillSelect label="Velocidad del papel" value={speedText} options={SPEEDS} onChange={setSpeedText} suffix="mm/s"/>
+        <PillSelect label="Ganancia" value={gainText} options={GAINS} onChange={setGainText} suffix="mm/mV"/>
+        {calMode==='grid'&&(
+         <>
+          <div className="stepper" role="group" aria-label="Escala">
+           <Btn icon="minus" label="Reducir escala" onPress={()=>nudge(.98)}/>
+           <Btn icon="plus" label="Aumentar escala" onPress={()=>nudge(1.02)}/>
+          </div>
+          <label className="opacity" title="Opacidad de la grilla">
+           <Icon name="opacity"/>
+           <input type="range" min=".1" max=".9" step=".02" value={opacity} aria-label="Opacidad de la grilla" onChange={e=>setOpacity(+e.target.value)}/>
+          </label>
+         </>
+        )}
+       </div>
       </nav>
      )}
 
      {activeBar==='measure'&&(
       <>
-       {m&&(
-        <div className="card glass hud">
-         <div className="hud-row">
-          <strong className="hud-title">{summary(m,state.calibration,formula)}</strong>
-          {m.kind==='QT'&&(
-           <select className="pill-select" aria-label="Fórmula de QTc" value={formula} onChange={e=>setFormula(e.target.value as Formula)}>
-            {formulas.map(f=><option key={f} value={f}>{f}</option>)}
-           </select>
-          )}
-          <Btn icon="trash" label="Eliminar" className="danger" onPress={()=>{commit(s=>({...s,measures:s.measures.filter(x=>x.id!==m.id)}));setSelected(null);}}/>
-         </div>
-         <div className="hud-row tools">
-          <div className="stepper" title="Mover 1 ms">
-           <Btn icon="chevronLeft" label="Mover 1 ms atrás" onPress={()=>nudgeMeasure(-1)}/>
-           <Btn icon="chevronRight" label="Mover 1 ms adelante" onPress={()=>nudgeMeasure(1)}/>
+       {m&&r&&(
+        <section className={'card glass hud'+(context?' has-ctx':'')} aria-label="Medida seleccionada" style={{'--kind':KIND_COLOR[m.kind]} as CSSProperties}>
+         <output className="readout" aria-live="polite">
+          <span className="r-main">
+           <span className="r-kind">{m.kind}</span>
+           {r.value!==null?<><span className="r-num">{r.value}</span><span className="r-unit">ms</span></>:<span className="r-hint">{r.hint}</span>}
+          </span>
+          {r.secondary&&<span className="r-sec">{r.secondary}</span>}
+         </output>
+         <div className="nudge">
+          <div className="stepper" role="group" aria-label="Mover 1 ms">
+           <Btn icon="chevronLeft" label="Mover 1 ms antes" onPress={()=>nudgeMeasure(-1)}/>
+           <Btn icon="chevronRight" label="Mover 1 ms después" onPress={()=>nudgeMeasure(1)}/>
           </div>
-          <div className="stepper" title="Largo 1 ms">
-           <Btn icon="minus" label="Acortar 1 ms" onPress={()=>nudgeMeasureEnd(-1)}/>
-           <Btn icon="plus" label="Alargar 1 ms" onPress={()=>nudgeMeasureEnd(1)}/>
+          <div className="stepper" role="group" aria-label="Largo 1 ms">
+           <Btn icon="minus" label="Acortar 1 ms" disabled={!!m.tangent} onPress={()=>nudgeMeasureEnd(-1)}/>
+           <Btn icon="plus" label="Alargar 1 ms" disabled={!!m.tangent} onPress={()=>nudgeMeasureEnd(1)}/>
           </div>
-          {m.kind==='QT'&&(
-           <>
-            <Button className={'chip'+(tool==='current'?' on':'')} onPress={()=>{setTool('current');notify('Tocá la R de este QT.');}}>R</Button>
-            <Button className={'chip'+(tool==='previous'?' on':'')} onPress={()=>{setTool('previous');notify('Tocá la R anterior.');}}>R ant.</Button>
-            <Btn icon="tangent" label={m.tangent?'Quitar tangente':'Tangente de T'} active={!!m.tangent} onPress={()=>m.tangent?updateMeasure(mm=>{delete mm.tangent;}):tangent()}/>
-           </>
-          )}
-          {m.kind==='RR'&&<Button className={'chip'+(m.projection?' on':'')} onPress={()=>updateMeasure(mm=>{mm.projection=!mm.projection;})}>Proyección</Button>}
          </div>
-         {m.tangent&&(
-          <label className="angle">
-           <span>{angle.toFixed(1)}°</span>
-           <input type="range" min="-179" max="179" step=".5" value={angle} onChange={e=>angleChange(+e.target.value)}/>
-          </label>
-         )}
-        </div>
+         <Btn icon="trash" label="Eliminar medida" className="danger trash" onPress={removeMeasure}/>
+         {context&&<div className="ctx">{context}</div>}
+        </section>
        )}
        <nav className="segmented kinds glass" aria-label="Tipo de medida">
-        {(['PR','QRS','QT','RR'] as Kind[]).map(k=>(
-         <Button key={k} className={'seg txt'+(tool===k?' on':'')} onPress={()=>chooseTool(k)}>{k}</Button>
+        {KINDS.map(k=>(
+         <button type="button" key={k} aria-pressed={tool===k} className={'seg txt'+(tool===k?' on':'')} style={{'--kind':KIND_COLOR[k]} as CSSProperties} onClick={()=>chooseTool(k)}><i className="kind-dot" aria-hidden="true"/>{k}</button>
         ))}
        </nav>
       </>
@@ -549,25 +589,32 @@ export default function App(){
 
    {modal==='records'&&(
     <div className="backdrop" onClick={()=>setModal(null)}>
-     <section className="sheet glass" onClick={e=>e.stopPropagation()} aria-label="Medidas">
+     <section className="sheet glass" onClick={e=>e.stopPropagation()} aria-label="Medidas" role="dialog">
       <div className="grabber"/>
       {!state.measures.length?(
        <p className="sheet-empty">Sin medidas</p>
       ):(
        <ul className="rows">
-        {state.measures.map(mm=>(
-         <li key={mm.id}>
-          <button className="row" onClick={()=>{setSelected(mm.id);setActiveBar('measure');setTool('move');setModal(null);}}>
-           <span>{summary(mm,state.calibration,formula)}</span>
-           <Icon name="chevronRight"/>
-          </button>
-         </li>
-        ))}
+        {state.measures.map(mm=>{
+         const rr=readout(mm,state.calibration,formula);
+         return (
+          <li key={mm.id}>
+           <button type="button" className="row" style={{'--kind':KIND_COLOR[mm.kind]} as CSSProperties} onClick={()=>{setSelected(mm.id);setActiveBar('measure');setTool('move');setModal(null);}}>
+            <i className="kind-dot" aria-hidden="true"/>
+            <span className="row-kind">{mm.kind}</span>
+            <span className="row-val">{rr.value!==null?<>{rr.value}<small> ms</small></>:<small>{rr.hint}</small>}</span>
+            <span className="row-sec">{[rr.secondary,rr.amplitude].filter(Boolean).join(' · ')}</span>
+            <Icon name="chevronRight"/>
+           </button>
+          </li>
+         );
+        })}
        </ul>
       )}
      </section>
     </div>
    )}
   </main>
+  </Busy.Provider>
  );
 }

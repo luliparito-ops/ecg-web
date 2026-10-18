@@ -1,10 +1,14 @@
 import Icon from './Icons';
-import {useEffect,useId,useRef,useState,type PointerEvent as RPointerEvent} from 'react';
+import {useEffect,useId,useRef,useState,type PointerEvent as RPointerEvent,type ReactNode} from 'react';
 import type {DocumentData} from './documents';
 import PDFLayer from './PDFLayer';
-import {clamp,copy,scaled,positions,intersection,summary,paperToImage,applyH,orderQuad,SQUARE_MM,type Axis,type Kind,type Measure,type Point,type State} from './model';
+import {clamp,copy,scaled,positions,intersection,readout,translate,setEdge,amplitudeMV,num,paperToImage,applyH,orderQuad,SQUARE_MM,type Axis,type Formula,type Kind,type Measure,type Point,type State} from './model';
 
 export type Tool='move'|Kind|'previous'|'current';
+
+/** Un tono por tipo de medida: sobrios, con contraste ≥ 4,5:1 sobre papel blanco (≥ 3,4:1 sobre la grilla rosada). */
+export const KIND_COLOR:Record<Kind,string>={PR:'#1E7F45',QRS:'#B93C0A',QT:'#7B3AB0',RR:'#0A64A8'};
+
 type Camera={zoom:number;pan:Point};
 type Props={
  doc:DocumentData;
@@ -16,7 +20,7 @@ type Props={
  onQuad:(q:Point[])=>void;
  axis:Axis;
  selected:string|null;
- formula:import('./model').Formula;
+ formula:Formula;
  gridVisible:boolean;
  opacity:number;
  rotation:number;
@@ -24,6 +28,7 @@ type Props={
  onCommit:(before:State)=>void;
  onSelect:(id:string|null)=>void;
  onNotice:(s:string)=>void;
+ onMarked?:()=>void;
 };
 type Gesture={
  type:'nav'|'grid'|'create'|'edit'|'mark'|'qtap'|'qpoint';
@@ -40,13 +45,40 @@ type Gesture={
  draft?:Measure;
 };
 
+/* Medidas en píxeles de pantalla (independientes del zoom). */
+const JAW=34;          // media altura de las mordazas sin extender
+const HIT=44;          // objetivo táctil mínimo (HIG)
+const KNOB=3.5;        // radio visible de una manija
+const PILL_H=18,PILL_PAD=7,PILL_FONT=11;
+const FONT='-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif';
+const HALO='rgba(255,255,255,.82)',INK='#3A3A3C',GRID_FINE='#0A84FF',GRID_BOLD='#FF9F0A',QUAD='#FFC300';
+
+let measureCtx:CanvasRenderingContext2D|null|undefined;
+const widthCache=new Map<string,number>();
+/** Ancho de texto en px de pantalla para dimensionar las píldoras. */
+function textWidth(text:string,weight=600,size=PILL_FONT){
+ const key=`${weight}|${size}|${text}`;
+ let w=widthCache.get(key);
+ if(w===undefined){
+  if(measureCtx===undefined)measureCtx=document.createElement('canvas').getContext('2d');
+  if(measureCtx){measureCtx.font=`${weight} ${size}px ${FONT}`;w=measureCtx.measureText(text).width;}
+  else w=text.length*size*.6;
+  if(widthCache.size>400)widthCache.clear();
+  widthCache.set(key,w);
+ }
+ return w;
+}
+
 export default function Stage(props:Props){
  const {doc,state,tool,calibrating,calMode,quad,axis,selected,formula,gridVisible,opacity,rotation}=props;
  const quadMode=calibrating&&calMode==='quad';
  const svg=useRef<SVGSVGElement>(null),group=useRef<SVGGElement>(null),host=useRef<HTMLDivElement>(null);
  const [size,setSize]=useState({w:390,h:844}),[camera,setCamera]=useState<Camera>({zoom:1,pan:{x:0,y:0}}),[draft,setDraft]=useState<Measure|null>(null),[lens,setLens]=useState<Point|null>(null);
+ const [dpr,setDpr]=useState(()=>typeof window==='undefined'?2:window.devicePixelRatio||1);
+ const [active,setActive]=useState<{id:string;target:string}|null>(null);
+ const [settle,setSettle]=useState<{id:string;target:string;key:number}|null>(null);
  const pointers=useRef(new Map<number,Point>()),gesture=useRef<Gesture|null>(null),timer=useRef<ReturnType<typeof setTimeout>>(),longActive=useRef(false);
- const isSpacePressed=useRef(false);
+ const isSpacePressed=useRef(false),rrHint=useRef(false);
 
  const isQuarterTurn=(rotation%180)!==0;
  const effectiveW=isQuarterTurn?doc.height:doc.width,effectiveH=isQuarterTurn?doc.width:doc.height;
@@ -58,7 +90,8 @@ export default function Stage(props:Props){
   const ob=new ResizeObserver(e=>{
    const r=e[0].contentRect;
    setSize({w:r.width,h:r.height});
-   pointers.current.clear();gesture.current=null;setDraft(null);setLens(null);
+   setDpr(window.devicePixelRatio||1);
+   pointers.current.clear();gesture.current=null;setDraft(null);setLens(null);setActive(null);
   });
   ob.observe(el);
   return()=>ob.disconnect();
@@ -84,6 +117,12 @@ export default function Stage(props:Props){
    if(timer.current)clearTimeout(timer.current);
   };
  },[]);
+
+ useEffect(()=>{
+  if(!settle)return;
+  const t=setTimeout(()=>setSettle(null),450);
+  return()=>clearTimeout(t);
+ },[settle]);
 
  const local=(p:Point)=>{
   const m=group.current?.getScreenCTM();
@@ -111,7 +150,7 @@ export default function Stage(props:Props){
   pointers.current.set(e.pointerId,p);
   e.currentTarget.setPointerCapture(e.pointerId);
 
-  // Right-click (2), middle-click (1), or space/shift held down: always pan
+  // Botón derecho o central, o Mayúsculas/espacio: siempre desplaza.
   const isPanButton=e.button===1||e.button===2||e.shiftKey||isSpacePressed.current;
   if(isPanButton){
    startNavigation();
@@ -122,7 +161,7 @@ export default function Stage(props:Props){
    stopLens();
    const old=gesture.current;
    if(old&&(old.type==='edit'||old.type==='mark'))props.onCommit(old.before);
-   setDraft(null);
+   setDraft(null);setActive(null);
    startNavigation();
    return;
   }
@@ -141,17 +180,21 @@ export default function Stage(props:Props){
    }
   }else if(calibrating){
    startNavigation();
+  }else if((tool==='previous'||tool==='current')&&selected){
+   // Marcar una R tiene prioridad: la R actual cae dentro del propio calibre.
+   gesture.current={type:'mark',ids:[e.pointerId],mid:p,distance:0,camera:copy(camera),before:copy(state),start:point,id:selected,target:tool};
   }else if(handle&&mid){
    props.onSelect(mid);
-   gesture.current={type:'edit',ids:[e.pointerId],mid:p,distance:0,camera:copy(camera),before:copy(state),start:point,target:handle.getAttribute('data-handle')||'',id:mid};
-  }else if((tool==='previous'||tool==='current')&&selected){
-   gesture.current={type:'mark',ids:[e.pointerId],mid:p,distance:0,camera:copy(camera),before:copy(state),start:point,id:selected,target:tool};
+   const t=handle.getAttribute('data-handle')||'move';
+   gesture.current={type:'edit',ids:[e.pointerId],mid:p,distance:0,camera:copy(camera),before:copy(state),start:point,target:t,id:mid};
+   setActive({id:mid,target:t});
   }else if(mid){
    props.onSelect(mid);
    gesture.current={type:'edit',ids:[e.pointerId],mid:p,distance:0,camera:copy(camera),before:copy(state),start:point,target:'move',id:mid};
+   setActive({id:mid,target:'move'});
   }else if(['PR','QRS','QT','RR'].includes(tool)){
    if(!state.calibration.confirmed){
-    props.onNotice('Calibrá el tiempo antes de medir.');
+    props.onNotice('Calibrá antes de medir.');
     startNavigation();
     return;
    }
@@ -175,28 +218,29 @@ export default function Stage(props:Props){
   }
  }
 
+ /** Edición relativa: la manija conserva la distancia al dedo (sin saltos al tomarla por el borde de su zona táctil). */
  function edited(g:Gesture,p:Point):State{
-  const next=copy(g.before),m=next.measures.find(m=>m.id===g.id);
-  if(!m)return next;
-  const dx=p.x-g.start.x,dy=p.y-g.start.y;
+  const next=copy(g.before),m=next.measures.find(m=>m.id===g.id),b=g.before.measures.find(m=>m.id===g.id);
+  if(!m||!b)return next;
+  const dx=p.x-g.start.x,dy=p.y-g.start.y,u=1/Math.max(scale,1e-5);
+  if(g.type==='mark'){
+   if(g.target==='previous')m.rrPrevious=p.x;else m.rrCurrent=p.x;
+   return next;
+  }
   switch(g.target){
-   case 'x1':m.x1=p.x;break;
-   case 'x2':m.x2=p.x;break;
-   case 'move':
-    m.x1+=dx;m.x2+=dx;m.y+=dy;
-    if(m.tangent){m.tangent.a.x+=dx;m.tangent.b.x+=dx;m.tangent.a.y+=dy;m.tangent.b.y+=dy;m.tangent.base+=dy;}
-    if(m.rrPrevious!==undefined)m.rrPrevious+=dx;
-    if(m.rrCurrent!==undefined)m.rrCurrent+=dx;
-    break;
-   case 'label':m.y=p.y;break;
-   case 'a':if(m.tangent)m.tangent.a=p;break;
-   case 'b':if(m.tangent)m.tangent.b=p;break;
+   case 'x1':m.x1=b.x1+dx;break;
+   case 'x2':m.x2=b.x2+dx;break;
+   case 'move':case 'label':translate(m,dx,dy);break;
+   case 'top':setEdge(m,'top',(b.top??b.y-JAW*u)+dy,4*u);break;
+   case 'bottom':setEdge(m,'bottom',(b.bottom??b.y+JAW*u)+dy,4*u);break;
+   case 'a':if(m.tangent&&b.tangent)m.tangent.a={x:b.tangent.a.x+dx,y:b.tangent.a.y+dy};break;
+   case 'b':if(m.tangent&&b.tangent)m.tangent.b={x:b.tangent.b.x+dx,y:b.tangent.b.y+dy};break;
    case 'line':
     if(m.tangent){m.tangent.a.x+=dx;m.tangent.b.x+=dx;m.tangent.a.y+=dy;m.tangent.b.y+=dy;}
     break;
-   case 'base':if(m.tangent)m.tangent.base=p.y;break;
-   case 'previous':m.rrPrevious=p.x;break;
-   case 'current':m.rrCurrent=p.x;break;
+   case 'base':if(m.tangent&&b.tangent)m.tangent.base=b.tangent.base+dy;break;
+   case 'previous':if(b.rrPrevious!==undefined)m.rrPrevious=b.rrPrevious+dx;break;
+   case 'current':if(b.rrCurrent!==undefined)m.rrCurrent=b.rrCurrent+dx;break;
   }
   return next;
  }
@@ -237,6 +281,7 @@ export default function Stage(props:Props){
   if(!pointers.current.has(e.pointerId))return;
   const g=gesture.current;
   stopLens();
+  setActive(null);
   if(g&&g.type==='qtap'&&!g.moved&&quad.length<4){
    props.onQuad([...quad,local(screen(e))]);
   }else if(g&&g.type==='create'&&g.draft){
@@ -246,13 +291,18 @@ export default function Stage(props:Props){
     props.onCommit(g.before);
     props.onChange({...g.before,measures:[...g.before.measures,m]});
     props.onSelect(m.id);
+    setSettle({id:m.id,target:'x2',key:Date.now()});
+    if(m.kind==='RR'&&!rrHint.current){rrHint.current=true;props.onNotice('Arrastrá ↕ las manijas para medir amplitud');}
    }
    setDraft(null);
   }else if(g&&g.type==='mark'){
    props.onChange(edited(g,local(screen(e))));
    props.onCommit(g.before);
+   if(g.id)setSettle({id:g.id,target:g.target||'',key:Date.now()});
+   props.onMarked?.();
   }else if(g&&g.type==='edit'){
    props.onCommit(g.before);
+   if(g.id&&g.target&&g.target!=='move')setSettle({id:g.id,target:g.target,key:Date.now()});
   }
   pointers.current.delete(e.pointerId);
   gesture.current=null;
@@ -260,7 +310,7 @@ export default function Stage(props:Props){
  }
 
  function cancelPointer(){
-  stopLens();
+  stopLens();setActive(null);
   const g=gesture.current;
   if(g&&(g.type==='edit'||g.type==='mark'))props.onChange(g.before);
   pointers.current.clear();gesture.current=null;setDraft(null);
@@ -275,10 +325,7 @@ export default function Stage(props:Props){
    if(!m)return;
    const dx=(e.key==='ArrowLeft'?-1:e.key==='ArrowRight'?1:0)*state.calibration.sx*state.calibration.speed/1000*(e.shiftKey?10:1);
    const dy=(e.key==='ArrowUp'?-1:e.key==='ArrowDown'?1:0)*state.calibration.sy*.1*(e.shiftKey?10:1);
-   m.x1+=dx;m.x2+=dx;m.y+=dy;
-   if(m.tangent){m.tangent.a.x+=dx;m.tangent.b.x+=dx;m.tangent.a.y+=dy;m.tangent.b.y+=dy;m.tangent.base+=dy;}
-   if(m.rrPrevious!==undefined)m.rrPrevious+=dx;
-   if(m.rrCurrent!==undefined)m.rrCurrent+=dx;
+   translate(m,dx,dy);
    props.onCommit(state);
    props.onChange(next);
   };
@@ -286,27 +333,167 @@ export default function Stage(props:Props){
   return()=>window.removeEventListener('keydown',key);
  },[state,calibrating,selected,props.onChange,props.onCommit]);
 
- const color=(m:Measure)=>m.kind==='RR'?'#079eb3':m.kind==='QT'?'#9254b7':m.kind==='PR'?'#16876f':'#d27a29';
- const unit=1/Math.max(scale,.00001),stroke=1.8*unit;
+ /* ---------- Geometría de pantalla ---------- */
+ const unit=1/Math.max(scale,.00001);
+ // Trazo principal: 2 px físicos en pantallas retina (1 px en las de densidad 1). Auxiliar: 1 px físico.
+ const MAIN=Math.max(1,Math.round(dpr*.75))/dpr,HAIR=1/dpr;
+ const rot=((rotation%360)+360)%360,horizontal=rot===0||rot===180;
+ /** Ajusta una coordenada del documento para que una línea de `w` px caiga justo sobre los píxeles físicos. Solo afecta al dibujo. */
+ const snapper=(which:'x'|'y')=>{
+  const onX=which==='x'?horizontal:!horizontal;
+  const T=onX?size.w/2+camera.pan.x:size.h/2+camera.pan.y;
+  const sign=which==='x'?(rot===0||rot===90?1:-1):(rot===0||rot===270?1:-1);
+  const C=which==='x'?doc.width/2:doc.height/2,k=sign*scale;
+  return (v:number,w:number)=>{
+   if(!Number.isFinite(v)||!k)return v;
+   const s=T+k*(v-C),pw=Math.max(1,Math.round(w*dpr)),off=pw%2?.5:0;
+   return C+((Math.round(s*dpr-off)+off)/dpr-T)/k;
+  };
+ };
+ const sx=snapper('x'),sy=snapper('y');
  const all=draft?[...state.measures,draft]:state.measures;
 
- function handle(m:Measure,x:number,y:number,name:string){
+ const knob=(m:Measure,x:number,y:number,name:string,c:string)=>{
+  const on=active?.id===m.id&&active.target===name;
   return (
-   <g data-handle={name} data-measure={m.id} style={{cursor:'ew-resize'}}>
-    <circle cx={x} cy={y} r={22*unit} fill="transparent"/>
-    <circle cx={x} cy={y} r={5*unit} fill={color(m)} stroke="white" strokeWidth={1.5*unit}/>
+   <g key={name+x+y} pointerEvents="none">
+    <circle cx={x} cy={y} r={(on?KNOB+1.5:KNOB)*unit} fill="#fff" stroke={c} strokeWidth={(on?MAIN*1.5:MAIN)*unit} style={{transition:'r .12s'}}/>
+    {settle&&settle.id===m.id&&settle.target===name&&(
+     <circle key={settle.key} className="settle" cx={x} cy={y} r={11*unit} fill="none" stroke={c} strokeWidth={MAIN*unit}/>
+    )}
    </g>
   );
+ };
+ const hitCircle=(m:Measure,x:number,y:number,name:string,cursor:string)=>(
+  <circle key={'h'+name} data-handle={name} data-measure={m.id} cx={x} cy={y} r={HIT/2*unit} fill="transparent" style={{cursor}}/>
+ );
+ const pill=(cx:number,cy:number,text:string,c:string,lead:string|null,handle:string|null,m:Measure,anchor:'middle'|'start'='middle')=>{
+  const full=(lead?lead+' ':'')+text;
+  const w=Math.ceil(textWidth(full))+PILL_PAD*2,h=PILL_H;
+  const x=anchor==='middle'?cx-w/2*unit:cx;
+  return (
+   <g data-handle={handle??undefined} data-measure={handle?m.id:undefined} style={{cursor:handle?'grab':undefined}} pointerEvents={handle?undefined:'none'}>
+    <rect x={x} y={cy-h/2*unit} width={w*unit} height={h*unit} rx={h/2*unit} fill={c} stroke={HALO} strokeWidth={unit}/>
+    <text x={x+w/2*unit} y={cy} dy=".36em" textAnchor="middle" fontSize={PILL_FONT*unit} fontWeight={600} fill="#fff" style={{fontVariantNumeric:'tabular-nums',letterSpacing:'.01em',userSelect:'none'}}>
+     {lead&&<tspan fillOpacity={.78}>{lead} </tspan>}{text}
+    </text>
+   </g>
+  );
+ };
+
+ function renderMeasure(m:Measure,isDraft:boolean){
+  const chosen=m.id===selected&&!calibrating&&!isDraft,c=KIND_COLOR[m.kind],end=intersection(m),xb=end??m.x2,xa=m.x1;
+  const H=JAW*unit,left=Math.min(xa,xb),right=Math.max(xa,xb),gap=(right-left)*scale;
+  const rr=m.kind==='RR',topY=rr&&m.top!==undefined?m.top:m.y-H,botY=rr&&m.bottom!==undefined?m.bottom:m.y+H;
+  const X1=sx(xa,MAIN),X2=sx(xb,MAIN),Y=sy(m.y,MAIN),T=sy(topY,MAIN),B=sy(botY,MAIN),ext=6*unit;
+  const r=readout(m,state.calibration,formula);
+  // En el lienzo solo el valor principal: QTc, lpm y mm quedan en el panel para no tapar el trazado.
+  const value=r.value===null?'—':`${r.value} ms`;
+  const mv=rr?amplitudeMV(m,state.calibration):null;
+  let d=`M${X1} ${T}V${B}M${X2} ${T}V${B}M${X1} ${Y}H${X2}`;
+  if(rr&&m.top!==undefined)d+=`M${Math.min(X1,X2)-ext} ${T}H${Math.max(X1,X2)+ext}`;
+  if(rr&&m.bottom!==undefined)d+=`M${Math.min(X1,X2)-ext} ${B}H${Math.max(X1,X2)+ext}`;
+  const dim=!!selected&&!chosen&&!isDraft&&!calibrating;
+  const mx=(xa+xb)/2,dir=xb>=xa?1:-1,inner=Math.min(14,gap*.3)*unit,outer=(HIT-14)*unit;
+  const jawRect=(x:number,s:number,name:string)=>{
+   const a=x-s*outer,b=x+s*inner;
+   return <rect key={name} data-handle={name} data-measure={m.id} x={Math.min(a,b)} y={Math.min(T,B)-10*unit} width={Math.abs(b-a)} height={Math.abs(B-T)+20*unit} fill="transparent" style={{cursor:'ew-resize'}}/>;
+  };
+  const amp=rr&&mv!==null;
+  // Referencias R por debajo de la barra: la píldora del valor ocupa la zona superior.
+  const rBot=m.y+H*1.45,rKnob=m.y+H*1.2,rLabel=(x:number,t:string)=>(
+   <text x={x} y={rBot+12*unit} textAnchor="middle" fontSize={10*unit} fontWeight={600} fill={c} stroke={HALO} strokeWidth={3*unit} paintOrder="stroke" pointerEvents="none" style={{userSelect:'none'}}>{t}</text>
+  );
+  const parts:ReactNode[]=[];
+
+  if(rr&&m.projection){
+   const p=positions(xa,xb-xa,doc.width).filter(x=>Math.abs(x-xa)>unit&&Math.abs(x-xb)>unit);
+   if(p.length)parts.push(<path key="proj" d={p.map(x=>`M${sx(x,HAIR)} ${T}V${B}`).join('')} stroke={c} strokeWidth={HAIR*unit} strokeDasharray={`${3*unit} ${3*unit}`} opacity=".75" fill="none" pointerEvents="none"/>);
+  }
+  parts.push(<path key="halo" d={d} stroke={HALO} strokeWidth={(MAIN+2)*unit} strokeLinecap="square" fill="none" pointerEvents="none"/>);
+  parts.push(<path key="main" d={d} stroke={c} strokeWidth={MAIN*unit} strokeLinecap="square" fill="none" pointerEvents="none"/>);
+
+  if(m.kind==='QT'){
+   const refs:[number|undefined,string,string][]=[[m.rrPrevious,'previous','R ant.'],[m.rrCurrent,'current','R']];
+   for(const [x,name,label] of refs){
+    if(x===undefined)continue;
+    const X=sx(x,HAIR);
+    parts.push(<g key={name} pointerEvents="none"><path d={`M${X} ${m.y-H}V${rBot}`} stroke={HALO} strokeWidth={(HAIR+1.5)*unit}/><path d={`M${X} ${m.y-H}V${rBot}`} stroke={c} strokeWidth={HAIR*unit} strokeDasharray={name==='previous'?`${3*unit} ${2*unit}`:undefined}/>{rLabel(x,label)}</g>);
+   }
+   if(m.rrPrevious!==undefined&&m.rrCurrent!==undefined){
+    const yy=sy(rKnob,HAIR);
+    parts.push(<path key="rrlink" d={`M${sx(m.rrPrevious,HAIR)} ${yy}H${sx(m.rrCurrent,HAIR)}`} stroke={c} strokeWidth={HAIR*unit} opacity=".7" pointerEvents="none"/>);
+   }
+  }
+
+  if(m.tangent){
+   const t=m.tangent,Bs=sy(t.base,HAIR);
+   parts.push(<path key="base" d={`M${Math.max(0,left-H)} ${Bs}H${Math.min(doc.width,right+H*2)}`} stroke={INK} strokeWidth={HAIR*unit} opacity=".85" pointerEvents="none"/>);
+   if(end!==null)parts.push(<path key="ext" d={`M${t.b.x} ${t.b.y}L${end} ${t.base}`} stroke={c} strokeWidth={HAIR*unit} strokeDasharray={`${3*unit} ${2*unit}`} pointerEvents="none"/>);
+   parts.push(<path key="thalo" d={`M${t.a.x} ${t.a.y}L${t.b.x} ${t.b.y}`} stroke={HALO} strokeWidth={(MAIN+2)*unit} pointerEvents="none"/>);
+   parts.push(<path key="tan" d={`M${t.a.x} ${t.a.y}L${t.b.x} ${t.b.y}`} stroke={c} strokeWidth={MAIN*unit} pointerEvents="none"/>);
+   if(end!==null)parts.push(<circle key="cross" cx={end} cy={t.base} r={3*unit} fill="#fff" stroke={c} strokeWidth={MAIN*unit} pointerEvents="none"/>);
+  }
+
+
+  if(!calibrating&&!isDraft){
+   parts.push(<rect key="hmove" data-handle="move" data-measure={m.id} x={left} y={m.y-16*unit} width={right-left} height={32*unit} fill="transparent" style={{cursor:chosen?'grab':'pointer'}}/>);
+   parts.push(jawRect(xa,-dir,'x1'));
+   if(!m.tangent)parts.push(jawRect(xb,dir,'x2'));
+  }
+
+  // Valor: píldora sobre las mordazas; en RR extendido, la amplitud va al costado de la mordaza derecha.
+  parts.push(<g key="pill">{pill(mx,Math.min(T,B)-(8+PILL_H/2)*unit,value,c,m.kind,isDraft||calibrating?null:'move',m)}</g>);
+  if(amp)parts.push(<g key="amp">{pill(right+8*unit,((m.top??m.y)+(m.bottom??m.y))/2,`${num(mv!,2)} mV`,c,null,null,m,'start')}</g>);
+
+  if(chosen){
+   parts.push(knob(m,X1,Y,'x1',c));
+   if(!m.tangent)parts.push(knob(m,X2,Y,'x2',c));
+   if(rr){
+    parts.push(knob(m,mx,T,'top',c),knob(m,mx,B,'bottom',c));
+    parts.push(hitCircle(m,mx,T,'top','ns-resize'),hitCircle(m,mx,B,'bottom','ns-resize'));
+    if(m.top!==undefined&&gap>HIT)parts.push(<rect key="htop" data-handle="top" data-measure={m.id} x={left+inner} y={T-10*unit} width={right-left-2*inner} height={20*unit} fill="transparent" style={{cursor:'ns-resize'}}/>);
+    if(m.bottom!==undefined&&gap>HIT)parts.push(<rect key="hbot" data-handle="bottom" data-measure={m.id} x={left+inner} y={B-10*unit} width={right-left-2*inner} height={20*unit} fill="transparent" style={{cursor:'ns-resize'}}/>);
+   }
+   if(m.kind==='QT'){
+    if(m.rrPrevious!==undefined){parts.push(knob(m,m.rrPrevious,rKnob,'previous',c),hitCircle(m,m.rrPrevious,rKnob,'previous','ew-resize'));}
+    if(m.rrCurrent!==undefined){parts.push(knob(m,m.rrCurrent,rKnob,'current',c),hitCircle(m,m.rrCurrent,rKnob,'current','ew-resize'));}
+   }
+   if(m.tangent){
+    const t=m.tangent,bx=Math.min(doc.width,right+H);
+    parts.push(<path key="hline" data-handle="line" data-measure={m.id} d={`M${t.a.x} ${t.a.y}L${t.b.x} ${t.b.y}`} stroke="transparent" strokeWidth={28*unit} style={{cursor:'grab'}}/>);
+    parts.push(<path key="hbase" data-handle="base" data-measure={m.id} d={`M${left} ${t.base}H${bx}`} stroke="transparent" strokeWidth={24*unit} style={{cursor:'ns-resize'}}/>);
+    parts.push(knob(m,t.a.x,t.a.y,'a',c),knob(m,t.b.x,t.b.y,'b',c),knob(m,bx,t.base,'base',INK));
+    parts.push(hitCircle(m,t.a.x,t.a.y,'a','move'),hitCircle(m,t.b.x,t.b.y,'b','move'),hitCircle(m,bx,t.base,'base','ns-resize'));
+   }
+  }
+
+  return <g key={m.id} data-measure={isDraft?undefined:m.id} opacity={calibrating?.3:dim?.5:1} style={{transition:'opacity .2s'}}>{parts}</g>;
  }
 
  const showGrid=(calibrating&&calMode==='grid')||gridVisible;
  const ordered=quad.length===4?orderQuad(quad):quad;
+
+ /** Grilla de calibración como líneas explícitas (los patrones SVG recortan la mitad del trazo en el borde de cada celda). */
+ function gridLayer(){
+  const c=state.calibration,mod5=(i:number)=>((i%5)+5)%5;
+  return [1,5,25].map(k=>{
+   const stepX=c.sx*k,stepY=c.sy*k,w=k===25?MAIN:HAIR;
+   let d='';
+   if(stepX*scale>=4)for(const x of positions(c.x,stepX,doc.width)){if(k<25&&mod5(Math.round((x-c.x)/stepX))===0)continue;const X=sx(x,w);d+=`M${X} 0V${doc.height}`;}
+   if(stepY*scale>=4)for(const y of positions(c.y,stepY,doc.height)){if(k<25&&mod5(Math.round((y-c.y)/stepY))===0)continue;const Y=sy(y,w);d+=`M0 ${Y}H${doc.width}`;}
+   return d?<path key={k} d={d} stroke={k===25?GRID_BOLD:GRID_FINE} strokeWidth={w*unit} opacity={k===1?.55:1} fill="none"/>:null;
+  });
+ }
+
+ const creating=['PR','QRS','QT','RR'].includes(tool)||tool==='previous'||tool==='current'||quadMode;
 
  return (
   <div ref={host} className="stage">
    <svg
     ref={svg}
     viewBox={`0 0 ${size.w} ${size.h}`}
+    style={{cursor:creating?'crosshair':calibrating?'move':'default'}}
     onContextMenu={e=>e.preventDefault()}
     onPointerDown={down}
     onPointerMove={move}
@@ -327,124 +514,43 @@ export default function Stage(props:Props){
      }
     }}
    >
-    <defs>
-     {[1,5,25].map(k=>{
-      const c=state.calibration,w=c.sx*k,h=c.sy*k;
-      return (
-       <pattern key={k} id={`grid${k}${id}`} x={c.x} y={c.y} width={w} height={h} patternUnits="userSpaceOnUse">
-        <path d={`${w*scale>=3?`M0 0V${h}`:''} ${h*scale>=3?`M0 0H${w}`:''}`} stroke={k===1?'#1bb9d9':k===5?'#377df0':'#e0a52e'} strokeWidth={(k===1?.5:k===5?1:1.5)*unit} fill="none"/>
-       </pattern>
-      );
-     })}
-    </defs>
-
     <g ref={group} transform={`translate(${size.w/2+camera.pan.x} ${size.h/2+camera.pan.y}) scale(${scale}) rotate(${rotation}) translate(${-doc.width/2} ${-doc.height/2})`}>
      <g id={contentID}>
       <rect width={doc.width} height={doc.height} fill="white"/>
       {doc.kind==='image'?<image href={doc.url} width={doc.width} height={doc.height} pointerEvents="none"/>:<PDFLayer key={`${doc.url}-${doc.page}`} doc={doc} scale={scale} onError={props.onNotice}/>}
-      {showGrid&&(
-       <g opacity={opacity} pointerEvents="none">
-        {[1,5,25].filter(k=>state.calibration.sx*k*scale>=3||state.calibration.sy*k*scale>=3).map(k=>(
-         <rect key={k} width={doc.width} height={doc.height} fill={`url(#grid${k}${id})`}/>
-        ))}
-       </g>
-      )}
+      {showGrid&&<g opacity={opacity} pointerEvents="none">{gridLayer()}</g>}
 
-      {all.map(m=>{
-       const chosen=m.id===selected&&!calibrating,end=intersection(m),x2=end??m.x2,c=color(m),left=Math.min(m.x1,x2),right=Math.max(m.x1,x2),height=55*unit;
-       return (
-        <g key={m.id} data-measure={m.id} opacity={calibrating?.35:1} style={{cursor:chosen?'default':'pointer'}}>
-         {m.kind==='RR'&&m.projection&&(
-          <path d={positions(m.x1,m.x2-m.x1,doc.width).filter(x=>Math.abs(x-m.x1)>unit&&Math.abs(x-m.x2)>unit).map(x=>`M${x} ${m.y-height}V${m.y+height}`).join(' ')} stroke={c} strokeWidth={unit} strokeDasharray={`${5*unit} ${4*unit}`} opacity=".65" fill="none" pointerEvents="none"/>
-         )}
-         <path d={`M${m.x1} ${m.y-height}V${m.y+height}M${x2} ${m.y-height}V${m.y+height}M${m.x1} ${m.y}H${x2}`} stroke={c} strokeWidth={stroke} fill="none" pointerEvents="none"/>
-         
-         {!calibrating&&(
-          <>
-           <path data-handle="x1" d={`M${m.x1} ${m.y-height*1.3}V${m.y+height*1.3}`} stroke="transparent" strokeWidth={32*unit} style={{cursor:'ew-resize'}}/>
-           {!m.tangent&&<path data-handle="x2" d={`M${x2} ${m.y-height*1.3}V${m.y+height*1.3}`} stroke="transparent" strokeWidth={32*unit} style={{cursor:'ew-resize'}}/>}
-           <path data-handle="move" d={`M${left} ${m.y}H${right}`} stroke="transparent" strokeWidth={28*unit} style={{cursor:'move'}}/>
-          </>
-         )}
-
-         <text x={(m.x1+x2)/2} y={m.y-14*unit} fill={c} fontSize={12*unit} fontWeight="600" textAnchor="middle" stroke="white" strokeWidth={3.5*unit} paintOrder="stroke" data-handle="label" style={{cursor:'move',userSelect:'none'}}>
-          {summary(m,state.calibration,formula)}
-         </text>
-
-         {m.kind==='QT'&&(
-          <>
-           {m.rrPrevious!==undefined&&(
-            <g>
-             <path d={`M${m.rrPrevious} ${m.y-height*1.7}V${m.y+height}`} stroke="#1199ac" strokeWidth={stroke} strokeDasharray={`${4*unit} ${3*unit}`}/>
-             {chosen&&handle(m,m.rrPrevious,m.y-height*1.3,'previous')}
-            </g>
-           )}
-           {m.rrCurrent!==undefined&&(
-            <g>
-             <path d={`M${m.rrCurrent} ${m.y-height*1.7}V${m.y+height}`} stroke="#1199ac" strokeWidth={stroke}/>
-             {chosen&&handle(m,m.rrCurrent,m.y-height*1.3,'current')}
-            </g>
-           )}
-           {m.rrPrevious!==undefined&&m.rrCurrent!==undefined&&(
-            <path d={`M${m.rrPrevious} ${m.y-height*1.5}H${m.rrCurrent}`} stroke="#1199ac" strokeWidth={unit}/>
-           )}
-          </>
-         )}
-
-         {m.tangent&&(
-          <>
-           <path d={`M${Math.max(0,left-height)} ${m.tangent.base}H${Math.min(doc.width,right+height*2)}`} stroke="#62626a" strokeWidth={unit}/>
-           {chosen&&<path data-handle="base" d={`M${left} ${m.tangent.base}H${Math.min(doc.width,right+height)}`} stroke="transparent" strokeWidth={26*unit} style={{cursor:'ns-resize'}}/>}
-           {end!==null&&<path d={`M${m.tangent.b.x} ${m.tangent.b.y}L${end} ${m.tangent.base}`} stroke="#bd931f" strokeWidth={unit} strokeDasharray={`${4*unit} ${3*unit}`}/>}
-           <path d={`M${m.tangent.a.x} ${m.tangent.a.y}L${m.tangent.b.x} ${m.tangent.b.y}`} stroke="#d1a126" strokeWidth={2.2*unit}/>
-           {chosen&&(
-            <>
-             <path data-handle="line" d={`M${m.tangent.a.x} ${m.tangent.a.y}L${m.tangent.b.x} ${m.tangent.b.y}`} stroke="transparent" strokeWidth={26*unit} style={{cursor:'move'}}/>
-             {handle(m,m.tangent.a.x,m.tangent.a.y,'a')}
-             {handle(m,m.tangent.b.x,m.tangent.b.y,'b')}
-             {handle(m,Math.min(doc.width,right+height),m.tangent.base,'base')}
-            </>
-           )}
-           {end!==null&&<circle cx={end} cy={m.tangent.base} r={3.5*unit} fill="#b18b1d"/>}
-          </>
-         )}
-
-         {chosen&&(
-          <>
-           {handle(m,m.x1,m.y,'x1')}
-           {handle(m,m.x1,m.y-height,'x1')}
-           {handle(m,m.x1,m.y+height,'x1')}
-           {!m.tangent&&(
-            <>
-             {handle(m,x2,m.y,'x2')}
-             {handle(m,x2,m.y-height,'x2')}
-             {handle(m,x2,m.y+height,'x2')}
-            </>
-           )}
-          </>
-         )}
-        </g>
-       );
-      })}
+      {state.measures.map(m=>renderMeasure(m,false))}
+      {draft&&renderMeasure(draft,true)}
 
       {quadMode&&(()=>{
        const H=ordered.length===4?paperToImage(ordered,SQUARE_MM):null;
        const line=(a:Point,b:Point)=>{const p=applyH(H!,a),q=applyH(H!,b);return p&&q?`M${p.x} ${p.y}L${q.x} ${q.y}`:'';};
        const cell=Math.hypot(ordered[1]?.x-ordered[0]?.x||0,ordered[1]?.y-ordered[0]?.y||0)*scale/SQUARE_MM;
        const mm=Array.from({length:SQUARE_MM+1},(_,i)=>i);
+       const edge=quad.length>1?`M${ordered.map(p=>`${p.x} ${p.y}`).join('L')}${quad.length===4?'Z':''}`:'';
        return (
         <g>
-         {H&&cell>=5&&<path d={mm.filter(i=>i%5).map(i=>line({x:i,y:0},{x:i,y:SQUARE_MM})+line({x:0,y:i},{x:SQUARE_MM,y:i})).join('')} stroke="#1bb9d9" strokeWidth={.5*unit} opacity=".7" fill="none" pointerEvents="none"/>}
-         {H&&<path d={mm.filter(i=>i%5===0).map(i=>line({x:i,y:0},{x:i,y:SQUARE_MM})+line({x:0,y:i},{x:SQUARE_MM,y:i})).join('')} stroke="#377df0" strokeWidth={unit} opacity=".9" fill="none" pointerEvents="none"/>}
-         {quad.length>1&&<path d={`M${ordered.map(p=>`${p.x} ${p.y}`).join('L')}${quad.length===4?'Z':''}`} stroke="#ffcc00" strokeWidth={1.4*unit} fill="none" pointerEvents="none"/>}
-         {quad.map((p,i)=>(
-          <g key={i} data-qpoint={i} style={{cursor:'crosshair'}}>
-           <circle cx={p.x} cy={p.y} r={24*unit} fill="transparent"/>
-           <circle cx={p.x} cy={p.y} r={4*unit} fill="none" stroke="#ffcc00" strokeWidth={1.3*unit}/>
-           <circle cx={p.x} cy={p.y} r={.9*unit} fill="#ffcc00"/>
-           <text x={p.x+9*unit} y={p.y-9*unit} fontSize={12*unit} fontWeight="700" fill="#ffcc00" stroke="#1c1c1e" strokeWidth={3*unit} paintOrder="stroke" pointerEvents="none">{i+1}</text>
-          </g>
-         ))}
+         {H&&cell>=5&&<path d={mm.filter(i=>i%5).map(i=>line({x:i,y:0},{x:i,y:SQUARE_MM})+line({x:0,y:i},{x:SQUARE_MM,y:i})).join('')} stroke={GRID_FINE} strokeWidth={HAIR*unit} opacity=".5" fill="none" pointerEvents="none"/>}
+         {H&&<path d={mm.filter(i=>i%5===0&&i>0&&i<SQUARE_MM).map(i=>line({x:i,y:0},{x:i,y:SQUARE_MM})+line({x:0,y:i},{x:SQUARE_MM,y:i})).join('')} stroke={GRID_FINE} strokeWidth={HAIR*unit} fill="none" pointerEvents="none"/>}
+         {edge&&<path d={edge} stroke="rgba(28,28,30,.45)" strokeWidth={(MAIN+2)*unit} strokeLinejoin="round" fill="none" pointerEvents="none"/>}
+         {edge&&<path d={edge} stroke={QUAD} strokeWidth={MAIN*unit} strokeLinejoin="round" fill="none" pointerEvents="none"/>}
+         {quad.map((p,i)=>{
+          const r=7*unit,g=2.5*unit,L=12*unit,cross=`M${p.x-L} ${p.y}H${p.x-g}M${p.x+g} ${p.y}H${p.x+L}M${p.x} ${p.y-L}V${p.y-g}M${p.x} ${p.y+g}V${p.y+L}`;
+          return (
+           <g key={i} data-qpoint={i} style={{cursor:'move'}}>
+            <circle cx={p.x} cy={p.y} r={HIT/2*unit} fill="transparent"/>
+            <g pointerEvents="none">
+             <circle cx={p.x} cy={p.y} r={r} fill="none" stroke="rgba(28,28,30,.45)" strokeWidth={(MAIN+2)*unit}/>
+             <path d={cross} stroke="rgba(28,28,30,.45)" strokeWidth={(HAIR+1.5)*unit}/>
+             <circle cx={p.x} cy={p.y} r={r} fill="none" stroke={QUAD} strokeWidth={MAIN*unit}/>
+             <path d={cross} stroke={QUAD} strokeWidth={MAIN*unit}/>
+             <circle cx={p.x+14*unit} cy={p.y-14*unit} r={7.5*unit} fill="rgba(28,28,30,.82)"/>
+             <text x={p.x+14*unit} y={p.y-14*unit} dy=".36em" textAnchor="middle" fontSize={10*unit} fontWeight={700} fill={QUAD} style={{fontVariantNumeric:'tabular-nums',userSelect:'none'}}>{i+1}</text>
+            </g>
+           </g>
+          );
+         })}
         </g>
        );
       })()}
@@ -452,17 +558,21 @@ export default function Stage(props:Props){
     </g>
    </svg>
 
-   {lens&&(
-    <div className="lens" aria-label="Lupa de precisión">
-     <svg viewBox={`${lens.x-42*unit/2.5} ${lens.y-42*unit/2.5} ${84*unit/2.5} ${84*unit/2.5}`}>
-      <use href={`#${contentID}`}/>
-      <path d={`M${lens.x-12*unit} ${lens.y}H${lens.x+12*unit}M${lens.x} ${lens.y-12*unit}V${lens.y+12*unit}`} stroke="#e5aa24" strokeWidth={.6*unit}/>
-     </svg>
-    </div>
-   )}
+   {lens&&(()=>{
+    const half=17*unit,u=half*2/124,g=4*u,L=half;
+    return (
+     <div className="lens" aria-label="Lupa de precisión">
+      <svg viewBox={`${lens.x-half} ${lens.y-half} ${half*2} ${half*2}`}>
+       <use href={`#${contentID}`}/>
+       <path d={`M${lens.x-L} ${lens.y}H${lens.x-g}M${lens.x+g} ${lens.y}H${lens.x+L}M${lens.x} ${lens.y-L}V${lens.y-g}M${lens.x} ${lens.y+g}V${lens.y+L}`} stroke={HALO} strokeWidth={3*u}/>
+       <path d={`M${lens.x-L} ${lens.y}H${lens.x-g}M${lens.x+g} ${lens.y}H${lens.x+L}M${lens.x} ${lens.y-L}V${lens.y-g}M${lens.x} ${lens.y+g}V${lens.y+L}`} stroke="#FF9F0A" strokeWidth={u}/>
+      </svg>
+     </div>
+    );
+   })()}
 
    {(camera.zoom!==1||camera.pan.x!==0||camera.pan.y!==0)&&(
-    <button className="zoom-btn glass" aria-label="Ajustar a pantalla" title="Ajustar a pantalla" onClick={()=>setCamera({zoom:1,pan:{x:0,y:0}})}><Icon name="fit"/></button>
+    <button type="button" className="zoom-btn glass" aria-label="Ajustar a pantalla" title="Ajustar a pantalla" onClick={()=>setCamera({zoom:1,pan:{x:0,y:0}})}><Icon name="fit"/></button>
    )}
   </div>
  );

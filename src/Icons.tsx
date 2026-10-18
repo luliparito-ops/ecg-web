@@ -1,4 +1,4 @@
-// Trazo regular de 1.6 en rejilla de 24, extremos redondeados: misma óptica que los símbolos de sistema de Apple.
+// Trazo regular de 1,6 en rejilla de 24 con extremos redondeados (peso «regular» de los símbolos de sistema). Dibujos propios.
 const paths:Record<string,React.ReactNode>={
  doc:<><path d="M6.5 3h7.2L19 8.3V19a2 2 0 0 1-2 2H6.5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/><path d="M13.5 3.2V8a.5.5 0 0 0 .5.5h4.8"/></>,
  undo:<><path d="M9 6 4.5 10.5 9 15"/><path d="M5 10.5h8.5a5 5 0 0 1 0 10H11"/></>,
@@ -10,7 +10,9 @@ const paths:Record<string,React.ReactNode>={
  chevronLeft:<path d="m14.5 5.5-6.5 6.5 6.5 6.5"/>,
  chevronRight:<path d="m9.5 5.5 6.5 6.5-6.5 6.5"/>,
  ruler:<><rect x="2.8" y="8.2" width="18.4" height="7.6" rx="2" transform="rotate(-45 12 12)"/><path d="m8.6 11.4 1.7 1.7M11.4 8.6l1.7 1.7M14.2 5.8l1.7 1.7"/></>,
- caliper:<><path d="M5 4v16M19 4v16"/><path d="M5 12h14M8.5 8.8 5 12l3.5 3.2M15.5 8.8 19 12l-3.5 3.2"/></>,
+ caliper:<><path d="M5.5 4v16M18.5 4v16"/><path d="M5.5 12h13"/><path d="m8.5 9.5-3 2.5 3 2.5M15.5 9.5l3 2.5-3 2.5"/></>,
+ projection:<><path d="M5 5v14M12 5v14"/><path d="M19 5v2.6M19 10.7v2.6M19 16.4V19"/></>,
+ chevronUpDown:<path d="m8.5 9.5 3.5-3.5 3.5 3.5M8.5 14.5l3.5 3.5 3.5-3.5"/>,
  list:<><circle cx="5" cy="7" r=".9" fill="currentColor"/><circle cx="5" cy="12" r=".9" fill="currentColor"/><circle cx="5" cy="17" r=".9" fill="currentColor"/><path d="M9.5 7H20M9.5 12H20M9.5 17H20"/></>,
  plus:<path d="M12 5v14M5 12h14"/>,
  minus:<path d="M5 12h14"/>,
