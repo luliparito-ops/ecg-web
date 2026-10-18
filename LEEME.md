@@ -40,6 +40,9 @@ Lenguaje visual de Apple: modo claro/oscuro automático, materiales translúcido
 ## 1. Calibración
 **Método de 4 puntos (por defecto en imágenes y fotos).** Tocá las 4 esquinas de un cuadrado de 25 mm (5×5 cuadros grandes), en sentido horario desde arriba a la izquierda. Cada esquina se arrastra para afinarla (aparece la lupa) y una malla de verificación muestra cómo se proyecta el cuadrado sobre el papel. Al confirmar: si el cuadrado ya está recto (capturas de pantalla) solo se fija la escala por eje; si no (fotos con perspectiva o giro), la imagen se endereza por homografía y se calibra sobre la imagen corregida. Volver a calibrar parte siempre del original. Enderezar descarta medidas previas. La precisión depende de cuántos píxeles ocupe 1 mm en la foto: con ~4 px/mm el error de un clic es de ~0,5 %. Límite de salida 4096 px por lado / 12 MP.
 
+**Detección automática en imágenes.** Al abrir una imagen la app busca la grilla (sin OpenCV, en el propio navegador): orientación de las dos familias de líneas, perspectiva por puntos de fuga, paso de las líneas gruesas de 5 mm en la imagen enderezada y un cuadrado de 25 mm sobre las líneas. Con confianza ≥ 0,7 calibra sola (aviso «Calibrado automáticamente», grilla visible para verificar); con menos, «Calibrar» coloca las 4 esquinas como sugerencia («Detección dudosa») y vos las confirmás o las arrastrás; si no encuentra nada, lo dice. El botón de destellos repite la detección. Velocidad supuesta 25 mm/s.
+Precisión medida con papel analítico (rotación y perspectiva conocidas): lados de 25,00 ± 0,1 mm y esquinas a ≤ 0,4 mm de las líneas, unos 0,3 s por imagen de 900 px. Con una foto sintética realista (perspectiva fuerte, desenfoque, líneas finas) la sugerencia queda a ~1 mm de las líneas y con hasta ~3 % de error en un lado, con confianza baja: ahí conviene ajustar las esquinas. Una foto con grilla muy tenue puede no detectarse. Supuestos: si solo se ve una periodicidad se asume que son las líneas de 5 mm (un papel solo con líneas de 1 mm saldría 5× mal: la malla de verificación lo muestra); el eje del tiempo es la familia más horizontal (una foto girada 90° o boca abajo hay que girarla antes). El papel con grilla de color (rosa, rojo, verde) funciona mejor que uno gris, porque la traza y el texto son neutros y se descartan.
+
 **PDF (automático).** Al abrir un PDF, o cambiar de página, se calibra solo: escala física del papel (1/72 in por punto) y velocidad leída del texto («25.0 mm/s»; si no aparece se supone 25 y el aviso lo dice). Si la página trae una retícula vectorial de puntos o líneas, se compara su paso con el milímetro físico y se avisa cuando difiere más de 0,5 %. Validado con un informe de tiras de Holter: 6 latidos seguidos midieron 2438 ms contra 2444 ms impresos (0,25 %). Esto asume que el PDF se imprimió al 100 %; si no es así, usá Calibrar.
 
 **Método de grilla.** El descrito a continuación.
@@ -102,7 +105,7 @@ src/Stage.tsx: lienzo, gestos, grilla, calibres y lupa.
 src/App.tsx: herramientas, referencias, sesiones y paneles.
 src/PDFLayer.tsx: render PDF local con control de resolución.
 src/documents.ts: apertura y exportación.
-src/model.test.ts: casos de cálculo y geometría.
+src/gridfinder.ts: detección automática de grilla. src/rectify.ts: enderezado por homografía. src/pdfvector.ts: escala y velocidad de PDF. src/autogrid.ts: lectura de píxeles. src/*.test.ts: cálculo, geometría y detección.
 
 ## Prueba rápida con un archivo sin datos personales
 Abrí `ejemplos/ECG_sintetico.svg`. Contiene cuadriculado de 8 unidades/mm: la grilla inicial ya debe coincidir, pero confirmá 25 mm/s y tocá Listo para habilitar medidas. El período de sus complejos es 160 unidades = 800 ms con esa escala. No representa un ECG clínico.

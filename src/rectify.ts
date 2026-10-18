@@ -51,6 +51,7 @@ export async function rectify(doc:DocumentData,quad:Point[],mm:number):Promise<R
 
  const src=canvas.getContext('2d')!.getImageData(0,0,W,H).data;
  const out=new ImageData(ow,oh),dst=out.data;
+ let bx0=ow,by0=oh,bx1=-1,by1=-1;
  for(let v=0;v<oh;v++){
   const Y=minY+(v+.5)/k;
   for(let u=0;u<ow;u++){
@@ -62,17 +63,23 @@ export async function rectify(doc:DocumentData,quad:Point[],mm:number):Promise<R
    const a=(y0*W+x0)*4,b=(y0*W+x1)*4,c=(y1*W+x0)*4,d=(y1*W+x1)*4;
    for(let ch=0;ch<3;ch++)dst[o+ch]=(src[a+ch]*(1-fx)+src[b+ch]*fx)*(1-fy)+(src[c+ch]*(1-fx)+src[d+ch]*fx)*fy;
    dst[o+3]=255;
+   // Papel claro dentro de la foto (no la mesa oscura ni el relleno blanco): define el recorte final.
+   if(Math.min(dst[o],dst[o+1],dst[o+2])>=140&&fx>=0){if(u<bx0)bx0=u;if(u>bx1)bx1=u;if(v<by0)by0=v;if(v>by1)by1=v;}
   }
  }
- const target=document.createElement('canvas');target.width=ow;target.height=oh;
- target.getContext('2d')!.putImageData(out,0,0);
+ const full=document.createElement('canvas');full.width=ow;full.height=oh;
+ full.getContext('2d')!.putImageData(out,0,0);
+ // Recorte al papel con 5 mm de margen (si no se encontró papel, la imagen completa).
+ const pad=Math.round(5*k),cx0=bx1>=0?Math.max(0,bx0-pad):0,cy0=bx1>=0?Math.max(0,by0-pad):0,cx1=bx1>=0?Math.min(ow,bx1+pad+1):ow,cy1=bx1>=0?Math.min(oh,by1+pad+1):oh;
+ const target=document.createElement('canvas');target.width=cx1-cx0;target.height=cy1-cy0;
+ target.getContext('2d')!.drawImage(full,cx0,cy0,cx1-cx0,cy1-cy0,0,0,cx1-cx0,cy1-cy0);
  const blob=await new Promise<Blob|null>(r=>target.toBlob(r,'image/png'));
  if(!blob)throw Error('No se pudo generar la imagen enderezada.');
  const base=doc.original??doc;
  const url=URL.createObjectURL(blob);
  return {
-  doc:{file:new File([blob],'ecg-enderezado.png',{type:'image/png'}),kind:'image',url,width:ow,height:oh,pages:1,page:1,original:base},
+  doc:{file:new File([blob],'ecg-enderezado.png',{type:'image/png'}),kind:'image',url,width:target.width,height:target.height,pages:1,page:1,original:base},
   ppmm:k,
-  origin:{x:-minX*k,y:-minY*k}
+  origin:{x:-minX*k-cx0,y:-minY*k-cy0}
  };
 }

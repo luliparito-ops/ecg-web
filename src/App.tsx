@@ -5,6 +5,7 @@ import Icon from './Icons';
 import {loadDocument,download,type DocumentData} from './documents';
 import {copy,scaled,validCalibration,initialCalibration,summary,duration,previousRR,corrected,intersection,orderQuad,quadProblem,axisAligned,quadCalibration,SQUARE_MM,type Point,type State,type Axis,type Kind,type Formula,type Measure} from './model';
 import {rectify} from './rectify';
+import {detectDocument} from './autogrid';
 import {pageScale,gridDeviation,PT_PER_MM} from './pdfvector';
 
 type ActiveBar='main'|'measure'|'cal';
@@ -98,6 +99,7 @@ export default function App(){
   setActiveBar('cal');
   setModal(null);
   notify(fromPhoto?'Tocá las 4 esquinas del cuadrado de 25 mm, en sentido horario desde arriba a la izquierda':'Un dedo mueve la grilla · dos dedos la escalan');
+  if(fromPhoto)void suggestQuad(doc.original??doc);
  }
 
  function cancelCalibration(){
@@ -106,6 +108,32 @@ export default function App(){
   calDoc.current=null;setCalQuad([]);
   setActiveBar('main');
   notify('Calibración anterior restaurada.');
+ }
+
+/** Calibra con un cuadrado de 25 mm: escala directa si ya está recto; si no, endereza la imagen. */
+ async function calibrateQuad(d:DocumentData,q:Point[],speed:number,keep:Measure[]):Promise<{state:State;doc?:DocumentData}>{
+  if(axisAligned(q)){
+   const c=quadCalibration(q,SQUARE_MM,speed);
+   if(!validCalibration(c))throw Error('Escala inválida.');
+   return {state:{calibration:c,measures:keep}};
+  }
+  const r=await rectify(d,q,SQUARE_MM);
+  return {state:{calibration:{sx:r.ppmm,sy:r.ppmm,x:r.origin.x,y:r.origin.y,speed,confirmed:true},measures:[]},doc:r.doc};
+ }
+
+ /** Busca la grilla y deja las 4 esquinas sugeridas sobre el cuadrado de 25 mm. */
+ async function suggestQuad(d:DocumentData){
+  setBusy(true);
+  try{
+   const det=await detectDocument(d);
+   if(!det){notify('No encontré la grilla: marcá las esquinas.');return;}
+   setCalQuad(det.quad);
+   notify(det.confidence>=.7?'Esquinas detectadas · ajustalas si hace falta':'Detección dudosa · revisá las esquinas');
+  }catch{
+   notify('No pude analizar la imagen: marcá las esquinas.');
+  }finally{
+   setBusy(false);
+  }
  }
 
  function modeChange(mode:'grid'|'quad'){
@@ -131,21 +159,14 @@ export default function App(){
    if(calQuad.length<4){notify('Marcá las 4 esquinas.');return;}
    const q=orderQuad(calQuad),problem=quadProblem(q);
    if(problem){notify(problem);return;}
-   if(axisAligned(q)){
-    const c=quadCalibration(q,SQUARE_MM,speed);
-    if(!validCalibration(c)){notify('Escala inválida.');return;}
-    finishCalibration({...stateRef.current,calibration:c});
-    notify('Calibrado.');
-    return;
-   }
    if(!doc)return;
    setBusy(true);
    try{
-    const r=await rectify(doc,q,SQUARE_MM);
-    finishCalibration({calibration:{sx:r.ppmm,sy:r.ppmm,x:r.origin.x,y:r.origin.y,speed,confirmed:true},measures:[]},r.doc);
-    notify('Imagen enderezada y calibrada.');
+    const r=await calibrateQuad(doc,q,speed,stateRef.current.measures);
+    finishCalibration(r.state,r.doc);
+    notify(r.doc?'Imagen enderezada y calibrada.':'Calibrado.');
    }catch(e){
-    notify(e instanceof Error?e.message:'No se pudo enderezar.');
+    notify(e instanceof Error?e.message:'No se pudo calibrar.');
    }finally{
     setBusy(false);
    }
@@ -256,7 +277,19 @@ export default function App(){
    const d=await loadDocument(file);
    release(docRef.current);
    setDoc(d);
-   const auto=d.kind==='pdf'?await autoCalibrate(d):null;
+   let auto:{state:State;message:string}|null=null;
+   if(d.kind==='pdf'){auto=await autoCalibrate(d);setGridVisible(false);}
+   else{
+    const det=await detectDocument(d).catch(()=>null);
+    if(det&&det.confidence>=.7){
+     try{
+      const r=await calibrateQuad(d,det.quad,25,[]);
+      auto={state:r.state,message:'Calibrado automáticamente · 25 mm/s (supuesta) · verificá la grilla'};
+      if(r.doc)setDoc(r.doc);
+      setGridVisible(true);
+     }catch{auto=null;}
+    }
+   }
    change(auto?auto.state:newState());
    setSelected(null);
    setTool('move');
@@ -457,6 +490,7 @@ export default function App(){
         </>
        ):(
         <div className="quad-count">
+         <Btn icon="auto" label="Detectar grilla" onPress={()=>{if(docRef.current)void suggestQuad(docRef.current);}}/>
          <span>{calQuad.length}/4</span>
          <Btn icon="trash" label="Borrar puntos" disabled={!calQuad.length} className="danger" onPress={()=>setCalQuad([])}/>
         </div>
