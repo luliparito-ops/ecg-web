@@ -1,19 +1,28 @@
+// Trazo regular de 1.6 en rejilla de 24, extremos redondeados: misma óptica que los símbolos de sistema de Apple.
+const paths:Record<string,React.ReactNode>={
+ doc:<><path d="M6.5 3h7.2L19 8.3V19a2 2 0 0 1-2 2H6.5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/><path d="M13.5 3.2V8a.5.5 0 0 0 .5.5h4.8"/></>,
+ undo:<><path d="M9 6 4.5 10.5 9 15"/><path d="M5 10.5h8.5a5 5 0 0 1 0 10H11"/></>,
+ redo:<><path d="m15 6 4.5 4.5L15 15"/><path d="M19 10.5h-8.5a5 5 0 0 0 0 10H13"/></>,
+ rotate:<><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v4.5h-4.5"/></>,
+ grid:<><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M3.5 9.2h17M3.5 14.8h17M9.2 3.5v17M14.8 3.5v17"/></>,
+ share:<><path d="M12 15V3.5M8.3 7.2 12 3.5l3.7 3.7"/><path d="M8 10.5H7a2 2 0 0 0-2 2V18a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5.5a2 2 0 0 0-2-2h-1"/></>,
+ trash:<><path d="M4.5 6.5h15M9.5 6.5V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v1.5"/><path d="M6.5 6.5 7.3 19a2 2 0 0 0 2 1.9h5.4a2 2 0 0 0 2-1.9l.8-12.5"/><path d="M10 11v5.5M14 11v5.5"/></>,
+ chevronLeft:<path d="m14.5 5.5-6.5 6.5 6.5 6.5"/>,
+ chevronRight:<path d="m9.5 5.5 6.5 6.5-6.5 6.5"/>,
+ ruler:<><rect x="2.8" y="8.2" width="18.4" height="7.6" rx="2" transform="rotate(-45 12 12)"/><path d="m8.6 11.4 1.7 1.7M11.4 8.6l1.7 1.7M14.2 5.8l1.7 1.7"/></>,
+ caliper:<><path d="M5 4v16M19 4v16"/><path d="M5 12h14M8.5 8.8 5 12l3.5 3.2M15.5 8.8 19 12l-3.5 3.2"/></>,
+ list:<><circle cx="5" cy="7" r=".9" fill="currentColor"/><circle cx="5" cy="12" r=".9" fill="currentColor"/><circle cx="5" cy="17" r=".9" fill="currentColor"/><path d="M9.5 7H20M9.5 12H20M9.5 17H20"/></>,
+ plus:<path d="M12 5v14M5 12h14"/>,
+ minus:<path d="M5 12h14"/>,
+ check:<path d="m5.5 12.7 4.2 4.2 8.8-9.6"/>,
+ close:<path d="m6.5 6.5 11 11m0-11-11 11"/>,
+ tangent:<><path d="M4 18.5 16.5 5.5"/><circle cx="16.5" cy="5.5" r="1.8"/><path d="M4 18.5h16" opacity=".55"/></>,
+ arrowX:<path d="M3.5 12h17M7.5 8l-4 4 4 4M16.5 8l4 4-4 4"/>,
+ arrowY:<path d="M12 3.5v17M8 7.5l4-4 4 4M8 16.5l4 4 4-4"/>,
+ arrowBoth:<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/>,
+ fit:<path d="M4 9V6a2 2 0 0 1 2-2h3M15 4h3a2 2 0 0 1 2 2v3M20 15v3a2 2 0 0 1-2 2h-3M9 20H6a2 2 0 0 1-2-2v-3"/>,
+ photo:<><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m4 17 4.6-4.4a1.5 1.5 0 0 1 2.1 0L14 16l1.6-1.6a1.5 1.5 0 0 1 2.1 0L20 16.7"/></>
+};
 export default function Icon({name}:{name:string}){
- const p:Record<string,React.ReactNode>={
- file:<><path d="M13 2H5v20h14V8l-6-6Zm0 0v6h6M12 12v6m-3-3h6"/></>,
- undo:<path d="m9 4-5 5 5 5M4 9h10a6 6 0 0 1 0 12"/>,
- redo:<path d="m15 4 5 5-5 5m5-5H10a6 6 0 0 0 0 12"/>,
- rotate:<><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.8 1.04 6.44 2.72L21 8"/><path d="M21 3v5h-5"/></>,
- trash:<><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></>,
- chevronLeft:<path d="m15 18-6-6 6-6"/>,
- chevronRight:<path d="m9 18 6-6-6-6"/>,
- share:<path d="M7 9H4v12h16V9h-3M12 15V2m-4 4 4-4 4 4"/>,
- more:<><circle cx="4" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="20" cy="12" r="1"/></>,
- records:<><path d="M10 5h11M10 12h11M10 19h11m-18-14 1 1 2-3"/><circle cx="4" cy="12" r="1.5"/><circle cx="4" cy="19" r="1.5"/></>,
- rr:<path d="M4 3v18M20 3v18M4 12h16m-12-3-3 3 3 3m8-6 3 3-3 3"/>,
- pen:<><circle cx="12" cy="12" r="10"/><path d="m7 19 3-11h4l3 11m-7-11 2-4 2 4M9 14h6"/></>,
- ruler:<path d="m4 17 13-13 4 4L8 21Zm3-3 2 2m1-5 2 2m1-5 2 2"/>,
- check:<path d="m5 12 4 4L19 6"/>,close:<path d="m6 6 12 12M18 6 6 18"/>
- };
- return <svg viewBox="0 0 24 24" aria-hidden="true">{p[name]||p.more}</svg>;
+ return <svg className="sf" viewBox="0 0 24 24" aria-hidden="true">{paths[name]||paths.doc}</svg>;
 }

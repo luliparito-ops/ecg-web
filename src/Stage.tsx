@@ -1,3 +1,4 @@
+import Icon from './Icons';
 import {useEffect,useId,useRef,useState,type PointerEvent as RPointerEvent} from 'react';
 import type {DocumentData} from './documents';
 import PDFLayer from './PDFLayer';
@@ -417,12 +418,9 @@ export default function Stage(props:Props){
     </div>
    )}
 
-   {/* Floating On-Screen Navigation & Zoom HUD for mouse and mobile */}
-   <div className="zoom-hud glass">
-    <button className="zoom-btn" title="Acercar (Zoom +)" onClick={()=>setCamera(c=>({...c,zoom:clamp(c.zoom*1.3,.3,100)}))}>+</button>
-    <button className="zoom-btn fit-btn" title="Restablecer tamaño" onClick={()=>setCamera({zoom:1,pan:{x:0,y:0}})}>{camera.zoom.toFixed(1)}×</button>
-    <button className="zoom-btn" title="Alejar (Zoom −)" onClick={()=>setCamera(c=>({...c,zoom:clamp(c.zoom/1.3,.3,100)}))}>−</button>
-   </div>
+   {(camera.zoom!==1||camera.pan.x!==0||camera.pan.y!==0)&&(
+    <button className="zoom-btn glass" aria-label="Ajustar a pantalla" title="Ajustar a pantalla" onClick={()=>setCamera({zoom:1,pan:{x:0,y:0}})}><Icon name="fit"/></button>
+   )}
   </div>
  );
 }

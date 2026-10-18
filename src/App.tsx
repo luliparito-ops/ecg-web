@@ -1,14 +1,12 @@
 import {useCallback,useEffect,useRef,useState} from 'react';
-import {Button,Input,Label,TextField} from 'react-aria-components';
+import {Button} from 'react-aria-components';
 import Stage,{type Tool} from './Stage';
 import Icon from './Icons';
-import {loadDocument,fileToBase64,download,type DocumentData} from './documents';
+import {loadDocument,download,type DocumentData} from './documents';
 import {copy,scaled,validCalibration,initialCalibration,summary,duration,previousRR,corrected,intersection,type State,type Axis,type Kind,type Formula,type Measure} from './model';
-import {validateSession,sessionFile,type Session} from './session';
-import {saveLocal,getLocal,clearLocal} from './storage';
 
 type ActiveBar='main'|'measure'|'cal';
-type ModalSheet='file'|'export'|'records'|'options'|null;
+type ModalSheet='records'|null;
 const formulas:Formula[]=['Bazett','Fridericia','Framingham','Hodges'];
 const newState=():State=>({calibration:initialCalibration(),measures:[]});
 
@@ -24,17 +22,23 @@ export default function App(){
  const [opacity,setOpacity]=useState(.55);
  const [gridVisible,setGridVisible]=useState(false);
  const [rotation,setRotation]=useState(0);
- const [notice,setNotice]=useState('Abrí un ECG para comenzar.');
+ const [notice,setNotice]=useState('');
  const [busy,setBusy]=useState(false);
  const [speedText,setSpeedText]=useState('25');
 
  const stateRef=useRef(state);stateRef.current=state;
  const docRef=useRef(doc);docRef.current=doc;
  const undoStack=useRef<State[]>([]),redoStack=useRef<State[]>([]);
+ const [canUndo,setCanUndo]=useState(false);
+ const [canRedo,setCanRedo]=useState(false);
  const calSnapshot=useRef<State|null>(null);
  const fileInput=useRef<HTMLInputElement>(null);
- const sessionInput=useRef<HTMLInputElement>(null);
  const noticeTimer=useRef<ReturnType<typeof setTimeout>>();
+
+ const syncHistory=useCallback(()=>{
+  setCanUndo(undoStack.current.length>0);
+  setCanRedo(redoStack.current.length>0);
+ },[]);
 
  const notify=useCallback((s:string)=>{
   setNotice(s);
@@ -46,8 +50,22 @@ export default function App(){
  useEffect(()=>()=>{if(doc){URL.revokeObjectURL(doc.url);void doc.pdf?.destroy();}},[doc?.url]);
 
  function change(s:State){stateRef.current=s;setState(s);}
- function record(before:State){undoStack.current.push(copy(before));if(undoStack.current.length>80)undoStack.current.shift();redoStack.current=[];}
+ function record(before:State){
+  undoStack.current.push(copy(before));
+  if(undoStack.current.length>80)undoStack.current.shift();
+  redoStack.current=[];
+  syncHistory();
+ }
  function commit(fn:(s:State)=>State){record(stateRef.current);change(fn(copy(stateRef.current)));}
+
+ useEffect(()=>{
+  const onPaste=(e:ClipboardEvent)=>{
+   const f=Array.from(e.clipboardData?.files||[]).find(x=>x.type.startsWith('image/')||x.type==='application/pdf');
+   if(f){e.preventDefault();void openFile(f);}
+  };
+  window.addEventListener('paste',onPaste);
+  return ()=>window.removeEventListener('paste',onPaste);
+ });
 
  const m=state.measures.find(m=>m.id===selected)||null;
  const calibrating=activeBar==='cal';
@@ -66,6 +84,7 @@ export default function App(){
   setTool('move');
   setActiveBar('cal');
   setModal(null);
+  notify('Un dedo mueve la grilla · dos dedos la escalan');
  }
 
  function cancelCalibration(){
@@ -99,12 +118,18 @@ export default function App(){
   redoStack.current.push(copy(stateRef.current));
   change(prev);
   setSelected(null);
+  syncHistory();
  }
 
  function redo(){
   if(!allowed())return;
   const next=redoStack.current.pop();
-  if(next){undoStack.current.push(copy(stateRef.current));change(next);setSelected(null);}
+  if(next){
+   undoStack.current.push(copy(stateRef.current));
+   change(next);
+   setSelected(null);
+   syncHistory();
+  }
  }
 
  function updateMeasure(fn:(m:Measure)=>void){
@@ -162,7 +187,6 @@ export default function App(){
 
  async function openFile(file:File){
   if(!allowed())return;
-  if((state.measures.length||state.calibration.confirmed)&&!window.confirm('Abrir otro documento reemplaza la calibración y medidas actuales. ¿Continuar?'))return;
   setBusy(true);
   try{
    const d=await loadDocument(file);
@@ -171,9 +195,9 @@ export default function App(){
    setSelected(null);
    setTool('move');
    setActiveBar('main');
-   undoStack.current=[];redoStack.current=[];
+   undoStack.current=[];redoStack.current=[];syncHistory();
    setModal(null);
-   notify('Documento abierto. Tocá "Calibrar" para ajustar la grilla.');
+   notify('Calibrá para empezar a medir.');
   }catch(e){
    notify(e instanceof Error?e.message:'No se pudo abrir.');
   }finally{
@@ -185,83 +209,18 @@ export default function App(){
   if(!doc?.pdf||!allowed())return;
   const n=doc.page+delta;
   if(n<1||n>doc.pages)return;
-  if((state.measures.length||state.calibration.confirmed)&&!confirm('Cambiar de página elimina calibración y medidas activas. ¿Continuar?'))return;
   setBusy(true);
   try{
    const pg=await doc.pdf.getPage(n),vp=pg.getViewport({scale:1});
    setDoc({...doc,page:n,width:vp.width,height:vp.height});
    change(newState());
    setSelected(null);
-   undoStack.current=[];redoStack.current=[];
-   notify('Nueva página: requiere calibrar nuevamente.');
+   undoStack.current=[];redoStack.current=[];syncHistory();
+   notify('Calibrá esta página.');
   }catch(e){
    notify(e instanceof Error?e.message:'Error de página.');
   }finally{
    setBusy(false);
-  }
- }
-
- async function makeSession():Promise<Session>{
-  if(!doc)throw Error('No hay documento.');
-  return {format:'ecg-web-session',version:1,file:{name:doc.file.name,type:doc.file.type,data:await fileToBase64(doc.file)},page:doc.page,state:copy(stateRef.current),formula};
- }
-
- async function saveSession(local:boolean){
-  if(!doc||!allowed())return;
-  setBusy(true);
-  try{
-   const session=await makeSession();
-   if(local){
-    await saveLocal(session);
-    notify('Sesión guardada en este navegador.');
-   }else{
-    download('sesion-ecg.json',JSON.stringify(session),'application/json');
-    notify('Sesión exportada en JSON.');
-   }
-  }catch(e){
-   notify(e instanceof Error?e.message:'No se pudo guardar.');
-  }finally{
-   setBusy(false);
-  }
- }
-
- async function restore(raw:unknown){
-  if(!allowed())return;
-  if(state.measures.length&&!confirm('¿Reemplazar la sesión actual?'))return;
-  setBusy(true);
-  let d:DocumentData|undefined;
-  try{
-   const s=validateSession(raw);
-   d=await loadDocument(sessionFile(s));
-   if(s.page>d.pages)throw Error('Página fuera del documento.');
-   if(d.pdf){
-    const pg=await d.pdf.getPage(s.page),vp=pg.getViewport({scale:1});
-    d={...d,page:s.page,width:vp.width,height:vp.height};
-   }
-   setDoc(d);
-   change(copy(s.state));
-   setFormula(s.formula);
-   setSelected(null);
-   undoStack.current=[];redoStack.current=[];
-   setTool('move');
-   setActiveBar('main');
-   setModal(null);
-   notify('Sesión restaurada.');
-  }catch(e){
-   if(d){URL.revokeObjectURL(d.url);void d.pdf?.destroy();}
-   notify(e instanceof Error?e.message:'No se pudo restaurar.');
-  }finally{
-   setBusy(false);
-  }
- }
-
- async function restoreLocal(){
-  try{
-   const s=await getLocal();
-   if(!s){notify('No hay sesión guardada en este navegador.');return;}
-   await restore(s);
-  }catch{
-   notify('No se pudo leer el almacenamiento local.');
   }
  }
 
@@ -295,14 +254,21 @@ export default function App(){
   });
  }
 
- const iconBtn=(name:string,label:string,fn:()=>void,active=false)=>(
-  <Button aria-label={label} className={'icon-btn'+(active?' active':'')} onPress={fn} isDisabled={busy}>
-   <Icon name={name}/>
-  </Button>
+
+ const Btn=({icon,label,onPress,active=false,disabled=false,className=''}:{icon:string;label:string;onPress:()=>void;active?:boolean;disabled?:boolean;className?:string})=>(
+  <button type="button" aria-label={label} title={label} className={'sf-btn '+className+(active?' on':'')} onClick={onPress} disabled={disabled||busy}>
+   <Icon name={icon}/>
+  </button>
  );
 
+ const done=(fn:()=>void,label:string)=>(
+  <button type="button" aria-label={label} title={label} className="done-btn" onClick={fn}><Icon name="check"/></button>
+ );
+
+ const angle=m?.tangent?Math.atan2(m.tangent.b.y-m.tangent.a.y,m.tangent.b.x-m.tangent.a.x)*180/Math.PI:0;
+
  return (
-  <main className="app-container">
+  <main className="app" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();const f=e.dataTransfer.files?.[0];if(f)void openFile(f);}}>
    {doc?(
     <Stage
      doc={doc}
@@ -322,281 +288,167 @@ export default function App(){
     />
    ):(
     <div className="empty">
-     <div className="empty-mark"><Icon name="rr"/></div>
-     <h1>Tu ECG.<br/>Un lienzo preciso.</h1>
-     <p>Abrí una imagen o un archivo PDF.<br/>Todo se procesa en tu navegador con total privacidad.</p>
-     <Button className="primary-pill" onPress={()=>fileInput.current?.click()}>Abrir ECG</Button>
-     <button className="text-link" onClick={restoreLocal}>Recuperar sesión local</button>
-     <small>Beta médica · No certificada para diagnóstico automático</small>
+     <Button className="open-hero" aria-label="Abrir imagen o PDF" onPress={()=>fileInput.current?.click()}>
+      <Icon name="photo"/>
+     </Button>
+     <p>Abrí, soltá o pegá un ECG</p>
     </div>
    )}
 
    <input ref={fileInput} type="file" accept="image/*,application/pdf" hidden onChange={e=>{const f=e.target.files?.[0];e.target.value='';if(f)void openFile(f);}}/>
-   <input ref={sessionInput} type="file" accept="application/json,.json" hidden onChange={e=>{const f=e.target.files?.[0];e.target.value='';if(f){if(f.size>90_000_000){notify('Sesión demasiado grande.');return;}void f.text().then(t=>restore(JSON.parse(t))).catch(()=>notify('Archivo de sesión inválido.'));}}}/>
 
-   {/* Top Navigation Bar (Header) */}
-   <header className="top-bar">
-    <div className="glass bar-capsule">
-     {iconBtn('file','Documento y Páginas',()=>setModal(modal==='file'?null:'file'),modal==='file')}
-    </div>
-
-    {doc&&(
-     <div className="glass bar-capsule">
-      <button className="icon-btn" title="Rotar 90°" aria-label="Rotar ECG 90 grados" onClick={()=>setRotation(r=>(r+90)%360)}>
-       <Icon name="rotate"/>
-      </button>
-     </div>
-    )}
-
-    <div className="right-tools">
-     <div className="glass bar-capsule">
-      {iconBtn('undo','Deshacer',undo)}
-      {iconBtn('redo','Rehacer',redo)}
-     </div>
-     <div className="glass bar-capsule">
-      {iconBtn('share','Exportar medidas o sesión',()=>setModal(modal==='export'?null:'export'),modal==='export')}
-      {iconBtn('more','Opciones de cuadrícula y memoria',()=>setModal(modal==='options'?null:'options'),modal==='options')}
-     </div>
-    </div>
-   </header>
-
-   {notice&&<div className="toast-pill glass" role="status">{notice}</div>}
-   {busy&&<div className="busy-pill glass" role="status">Procesando…</div>}
-
-   {/* Calibrating Banner indicator at top */}
-   {activeBar==='cal'&&(
-    <div className="top-instruction-pill glass">
-     <span>💡 <strong>1 dedo:</strong> mover grilla &nbsp;|&nbsp; <strong>2 dedos / rueda:</strong> ajustar escala</span>
-    </div>
+   {doc&&(
+    <header className="top-bar">
+     {activeBar==='cal'?(
+      <>
+       <div className="bar-group">{done(applyCalibration,'Listo')}{<Btn icon="close" label="Cancelar" className="plain" onPress={cancelCalibration}/>}</div>
+      </>
+     ):activeBar==='measure'?(
+      <>
+       <div className="bar-group">{done(()=>{setTool('move');setSelected(null);setActiveBar('main');},'Listo')}</div>
+       {canUndo&&<div className="capsule glass"><Btn icon="undo" label="Deshacer" onPress={undo}/></div>}
+      </>
+     ):(
+      <>
+       <div className="bar-group">
+        <div className="capsule glass"><Btn icon="doc" label="Abrir" onPress={()=>fileInput.current?.click()}/></div>
+        {doc.pages>1&&(
+         <div className="capsule glass">
+          <Btn icon="chevronLeft" label="Página anterior" disabled={doc.page<=1} onPress={()=>void page(-1)}/>
+          <span className="page-count">{doc.page}/{doc.pages}</span>
+          <Btn icon="chevronRight" label="Página siguiente" disabled={doc.page>=doc.pages} onPress={()=>void page(1)}/>
+         </div>
+        )}
+       </div>
+       <div className="bar-group">
+        {(canUndo||canRedo)&&(
+         <div className="capsule glass">
+          {canUndo&&<Btn icon="undo" label="Deshacer" onPress={undo}/>}
+          {canRedo&&<Btn icon="redo" label="Rehacer" onPress={redo}/>}
+         </div>
+        )}
+        <div className="capsule glass">
+         <Btn icon="rotate" label="Girar" onPress={()=>setRotation(r=>(r+90)%360)}/>
+         <Btn icon="grid" label="Grilla" active={gridVisible} onPress={()=>setGridVisible(v=>!v)}/>
+         {state.measures.length>0&&<Btn icon="share" label="Exportar CSV" onPress={csv}/>}
+        </div>
+       </div>
+      </>
+     )}
+    </header>
    )}
 
-   {/* BOTTOM DOCK: Follows iOS Notes Markup Logic */}
+   {notice&&<div className="toast glass" role="status">{notice}</div>}
+   {busy&&<div className="spinner" role="status" aria-label="Procesando"/>}
+
    {doc&&(
-    <div className="bottom-dock-container">
-
-     {/* 1. MAIN DOCK (Default Tool Bar) */}
+    <div className="bottom">
      {activeBar==='main'&&(
-      <nav className="dock-row" aria-label="Herramientas principales">
-       <div className="glass bar-capsule main-dock">
-        <Button className="dock-pill" onPress={()=>{chooseTool('QT');}}>
-         <Icon name="pen"/>
-         <span>Medir</span>
-        </Button>
-        <Button className="dock-pill" onPress={beginCalibration}>
-         <Icon name="ruler"/>
-         <span>Calibrar</span>
-        </Button>
-        <Button className="dock-pill" onPress={()=>setModal(modal==='records'?null:'records')}>
-         <Icon name="records"/>
-         <span>Registros{state.measures.length?` (${state.measures.length})`:''}</span>
-        </Button>
-        <Button className={'dock-pill '+(tool==='move'?'active':'')} onPress={()=>{setTool('move');setSelected(null);notify('Modo Navegación: arrastrá con 1 dedo para mover el lienzo.');}}>
-         <Icon name="rr"/>
-         <span>Navegar</span>
-        </Button>
-       </div>
+      <nav className="capsule glass dock" aria-label="Herramientas">
+       <Btn icon="caliper" label="Medir" onPress={()=>chooseTool('QT')}/>
+       <Btn icon="ruler" label="Calibrar" active={state.calibration.confirmed} onPress={beginCalibration}/>
+       {state.measures.length>0&&(
+        <span className="badge-wrap">
+         <Btn icon="list" label="Medidas" onPress={()=>setModal('records')}/>
+         <b className="badge">{state.measures.length}</b>
+        </span>
+       )}
       </nav>
      )}
 
-     {/* 2. CALIBRATION DOCK (Ultra-Compact iOS Style Bar) */}
      {activeBar==='cal'&&(
-      <nav className="dock-cal-wrapper glass" aria-label="Barra de Calibración">
-       <div className="cal-sub-row">
-        <div className="ios-segmented">
-         {([['both','⤢ Ambos'],['x','↔ Tiempo'],['y','↕ Altura']] as const).map(([a,label])=>(
-          <Button key={a} className={'segment-btn '+(axis===a?'selected':'')} onPress={()=>setAxis(a)}>{label}</Button>
-         ))}
-        </div>
-
-        <div className="cal-speed-group">
-         <span className="cal-label">Velocidad</span>
-         <button
-          className="speed-pill-btn"
-          title="Alternar velocidad estándar"
-          onClick={()=>{
-           const next=speedText==='25'?'50':'25';
-           setSpeedText(next);
-          }}
-         >
-          {speedText} mm/s
-         </button>
-        </div>
-
-        <div className="cal-nudge-group">
-         <button className="cal-mini-btn" title="Achicar escala" onClick={()=>nudge(.98)}>−2%</button>
-         <button className="cal-mini-btn" title="Agrandar escala" onClick={()=>nudge(1.02)}>+2%</button>
-        </div>
+      <nav className="card glass cal-card" aria-label="Calibración">
+       <div className="segmented" role="group" aria-label="Eje">
+        {([['both','arrowBoth','Ambos ejes'],['x','arrowX','Tiempo'],['y','arrowY','Amplitud']] as const).map(([a,ic,label])=>(
+         <button type="button" key={a} aria-label={label} title={label} className={'seg'+(axis===a?' on':'')} onClick={()=>setAxis(a)}><Icon name={ic}/></button>
+        ))}
        </div>
-
-       <div className="cal-action-row">
-        <Button className="cal-text-btn cancel" onPress={cancelCalibration}>Cancelar</Button>
-        <div className="cal-scale-info">
-         <span>X: {state.calibration.sx.toFixed(2)}</span>
-         <span>Y: {state.calibration.sy.toFixed(2)}</span>
-        </div>
-        <label className="cal-opacity-label">
-         <span>Opacidad</span>
-         <input type="range" min=".1" max=".9" step=".02" value={opacity} onChange={e=>setOpacity(+e.target.value)}/>
-        </label>
-        <Button className="cal-done-btn" onPress={applyCalibration}>✓ Listo</Button>
+       <div className="segmented" role="group" aria-label="Velocidad">
+        {['25','50'].map(v=>(
+         <Button key={v} className={'seg txt'+(speedText===v?' on':'')} onPress={()=>setSpeedText(v)}>{v}<small>mm/s</small></Button>
+        ))}
        </div>
+       <div className="stepper">
+        <Btn icon="minus" label="Reducir escala" onPress={()=>nudge(.98)}/>
+        <Btn icon="plus" label="Aumentar escala" onPress={()=>nudge(1.02)}/>
+       </div>
+       <label className="opacity" title="Opacidad de la grilla">
+        <Icon name="grid"/>
+        <input type="range" min=".1" max=".9" step=".02" value={opacity} onChange={e=>setOpacity(+e.target.value)}/>
+       </label>
       </nav>
      )}
 
-     {/* 3. MEASURE DOCK (Transforms smoothly into Measurement Controls) */}
      {activeBar==='measure'&&(
-      <div className="measure-dock-container">
-
-       {/* Floating Measurement HUD when a caliper is selected */}
+      <>
        {m&&(
-        <div className="measure-hud glass">
-         <div className="hud-header">
+        <div className="card glass hud">
+         <div className="hud-row">
           <strong className="hud-title">{summary(m,state.calibration,formula)}</strong>
           {m.kind==='QT'&&(
-           <select className="hud-select" value={formula} onChange={e=>setFormula(e.target.value as Formula)}>
+           <select className="pill-select" aria-label="Fórmula de QTc" value={formula} onChange={e=>setFormula(e.target.value as Formula)}>
             {formulas.map(f=><option key={f} value={f}>{f}</option>)}
            </select>
           )}
-          <button className="hud-trash-btn" title="Eliminar medida" onClick={()=>{commit(s=>({...s,measures:s.measures.filter(x=>x.id!==m.id)}));setSelected(null);}}>
-           <Icon name="trash"/>
-          </button>
+          <Btn icon="trash" label="Eliminar" className="danger" onPress={()=>{commit(s=>({...s,measures:s.measures.filter(x=>x.id!==m.id)}));setSelected(null);}}/>
          </div>
-
-         {/* Step adjustment & QT specific tools */}
-         <div className="hud-actions">
-          <div className="nudge-cluster">
-           <span className="nudge-title">Ajuste fino:</span>
-           <button className="nudge-btn" title="Mover 1ms a la izquierda" onClick={()=>nudgeMeasure(-1)}>◀ 1ms</button>
-           <button className="nudge-btn" title="Mover 1ms a la derecha" onClick={()=>nudgeMeasure(1)}>1ms ▶</button>
-           <button className="nudge-btn end" title="Ajustar extremo derecho -1ms" onClick={()=>nudgeMeasureEnd(-1)}>−1ms fin</button>
-           <button className="nudge-btn end" title="Ajustar extremo derecho +1ms" onClick={()=>nudgeMeasureEnd(1)}>+1ms fin</button>
+         <div className="hud-row tools">
+          <div className="stepper" title="Mover 1 ms">
+           <Btn icon="chevronLeft" label="Mover 1 ms atrás" onPress={()=>nudgeMeasure(-1)}/>
+           <Btn icon="chevronRight" label="Mover 1 ms adelante" onPress={()=>nudgeMeasure(1)}/>
           </div>
-
+          <div className="stepper" title="Largo 1 ms">
+           <Btn icon="minus" label="Acortar 1 ms" onPress={()=>nudgeMeasureEnd(-1)}/>
+           <Btn icon="plus" label="Alargar 1 ms" onPress={()=>nudgeMeasureEnd(1)}/>
+          </div>
           {m.kind==='QT'&&(
-           <div className="qt-actions">
-            <button className={'qt-chip '+(tool==='current'?'active':'')} onClick={()=>{setTool('current');notify('Tocá el pico R del complejo cuyo QT estás midiendo.');}}>
-             R del QT
-            </button>
-            <button className={'qt-chip '+(tool==='previous'?'active':'')} onClick={()=>{setTool('previous');notify('Tocá el pico R anterior.');}}>
-             R anterior
-            </button>
-            {!m.tangent?(
-             <button className="qt-chip" onClick={tangent}>+ Tangente T</button>
-            ):(
-             <button className="qt-chip active" onClick={()=>updateMeasure(mm=>{delete mm.tangent;})}>QT directo</button>
-            )}
-           </div>
+           <>
+            <Button className={'chip'+(tool==='current'?' on':'')} onPress={()=>{setTool('current');notify('Tocá la R de este QT.');}}>R</Button>
+            <Button className={'chip'+(tool==='previous'?' on':'')} onPress={()=>{setTool('previous');notify('Tocá la R anterior.');}}>R ant.</Button>
+            <Btn icon="tangent" label={m.tangent?'Quitar tangente':'Tangente de T'} active={!!m.tangent} onPress={()=>m.tangent?updateMeasure(mm=>{delete mm.tangent;}):tangent()}/>
+           </>
           )}
-
-          {m.kind==='RR'&&(
-           <button className={'qt-chip '+(m.projection?'active':'')} onClick={()=>updateMeasure(mm=>{mm.projection=!mm.projection;})}>
-            {m.projection?'Proyección activa':'Activar proyección'}
-           </button>
-          )}
+          {m.kind==='RR'&&<Button className={'chip'+(m.projection?' on':'')} onPress={()=>updateMeasure(mm=>{mm.projection=!mm.projection;})}>Proyección</Button>}
          </div>
-
          {m.tangent&&(
-          <div className="tangent-slider-row">
-           <span>Ángulo {(Math.atan2(m.tangent.b.y-m.tangent.a.y,m.tangent.b.x-m.tangent.a.x)*180/Math.PI).toFixed(1)}°</span>
-           <input type="range" min="-179" max="179" step=".5" value={Math.atan2(m.tangent.b.y-m.tangent.a.y,m.tangent.b.x-m.tangent.a.x)*180/Math.PI} onChange={e=>angleChange(+e.target.value)}/>
-          </div>
+          <label className="angle">
+           <span>{angle.toFixed(1)}°</span>
+           <input type="range" min="-179" max="179" step=".5" value={angle} onChange={e=>angleChange(+e.target.value)}/>
+          </label>
          )}
         </div>
        )}
-
-       {/* Bottom Measurement Selector Bar */}
-       <nav className="dock-measure-bar glass" aria-label="Opciones de medición">
-        <div className="measure-kind-selector">
-         {(['PR','QRS','QT','RR'] as Kind[]).map(k=>(
-          <Button key={k} className={'kind-btn '+(tool===k?'active':'')} onPress={()=>chooseTool(k)}>
-           {k}
-          </Button>
-         ))}
-        </div>
-
-        <Button className="measure-done-btn" onPress={()=>{setTool('move');setSelected(null);setActiveBar('main');}}>
-         ✓ Listo
-        </Button>
+       <nav className="segmented kinds glass" aria-label="Tipo de medida">
+        {(['PR','QRS','QT','RR'] as Kind[]).map(k=>(
+         <Button key={k} className={'seg txt'+(tool===k?' on':'')} onPress={()=>chooseTool(k)}>{k}</Button>
+        ))}
        </nav>
-      </div>
+      </>
      )}
-
     </div>
    )}
 
-   {/* MODAL BOTTOM SHEETS (Document, Export, Records, Options) */}
-   {modal&&(
-    <div className="modal-backdrop" onClick={()=>setModal(null)}>
-     <section className="modal-sheet glass" onClick={e=>e.stopPropagation()}>
-      <div className="sheet-header">
-       <strong>
-        {modal==='file'?'Documento y Páginas':modal==='export'?'Guardar y Exportar':modal==='records'?'Registros de Medidas':'Opciones'}
-       </strong>
-       <button className="sheet-close" onClick={()=>setModal(null)}>✕</button>
-      </div>
-
-      <div className="sheet-content">
-       {modal==='file'&&(
-        <>
-         <Button className="sheet-btn" onPress={()=>fileInput.current?.click()}>📁 Abrir imagen o archivo PDF</Button>
-         <Button className="sheet-btn" onPress={()=>sessionInput.current?.click()}>📥 Abrir sesión guardada (.json)</Button>
-         <Button className="sheet-btn" onPress={()=>void restoreLocal()}>🔄 Recuperar sesión de este navegador</Button>
-         {doc&&doc.pages>1&&(
-          <div className="sheet-pagination">
-           <span>Página {doc.page} de {doc.pages}</span>
-           <div className="sheet-btn-row">
-            <Button className="sheet-mini-btn" isDisabled={doc.page<=1||busy} onPress={()=>void page(-1)}>← Anterior</Button>
-            <Button className="sheet-mini-btn" isDisabled={doc.page>=doc.pages||busy} onPress={()=>void page(1)}>Siguiente →</Button>
-           </div>
-          </div>
-         )}
-        </>
-       )}
-
-       {modal==='export'&&(
-        <>
-         <Button className="sheet-btn" isDisabled={!doc||busy} onPress={()=>void saveSession(false)}>Descargar sesión JSON (editable)</Button>
-         <Button className="sheet-btn" isDisabled={!doc||busy} onPress={()=>void saveSession(true)}>Guardar sesión en este navegador (IndexedDB)</Button>
-         <Button className="sheet-btn" isDisabled={!doc} onPress={csv}>📊 Exportar medidas en CSV</Button>
-        </>
-       )}
-
-       {modal==='records'&&(
-        <>
-         {!state.measures.length?(
-          <p className="sheet-empty">No hay medidas registradas todavía.<br/>Tocá "Medir" para agregar una.</p>
-         ):(
-          <div className="records-list">
-           {state.measures.map((mm,i)=>(
-            <button key={mm.id} className="record-item" onClick={()=>{setSelected(mm.id);setActiveBar('measure');setTool('move');setModal(null);}}>
-             <span className="rec-num">{String(i+1).padStart(2,'0')}</span>
-             <div className="rec-info">
-              <span className="rec-summary">{summary(mm,state.calibration,formula)}</span>
-              <small className="rec-details">{mm.tangent?'Método Tangente':'Calibre directo'}{mm.kind==='QT'?' · '+formula:''}</small>
-             </div>
-             <span className="rec-arrow">›</span>
-            </button>
-           ))}
-          </div>
-         )}
-        </>
-       )}
-
-       {modal==='options'&&(
-        <>
-         <Button className="sheet-btn" onPress={()=>setGridVisible(!gridVisible)}>
-          {gridVisible?'Ocultar':'Mostrar'} grilla de verificación milimétrica
-         </Button>
-         <Button className="sheet-btn danger" onPress={()=>{if(confirm('¿Borrar la sesión guardada en este navegador?'))void clearLocal().then(()=>{notify('Sesión local eliminada.');setModal(null);}).catch(()=>notify('No se pudo borrar.'));}}>
-          Eliminar sesión guardada localmente
-         </Button>
-        </>
-       )}
-      </div>
+   {modal==='records'&&(
+    <div className="backdrop" onClick={()=>setModal(null)}>
+     <section className="sheet glass" onClick={e=>e.stopPropagation()} aria-label="Medidas">
+      <div className="grabber"/>
+      {!state.measures.length?(
+       <p className="sheet-empty">Sin medidas</p>
+      ):(
+       <ul className="rows">
+        {state.measures.map(mm=>(
+         <li key={mm.id}>
+          <button className="row" onClick={()=>{setSelected(mm.id);setActiveBar('measure');setTool('move');setModal(null);}}>
+           <span>{summary(mm,state.calibration,formula)}</span>
+           <Icon name="chevronRight"/>
+          </button>
+         </li>
+        ))}
+       </ul>
+      )}
      </section>
     </div>
    )}
-
   </main>
  );
 }

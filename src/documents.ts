@@ -16,5 +16,4 @@ export async function loadDocument(file:File):Promise<DocumentData>{
  return {file,kind:'image',url,width:im.naturalWidth,height:im.naturalHeight,pages:1,page:1};
  }catch(e){URL.revokeObjectURL(url);throw e;}
 }
-export async function fileToBase64(file:File):Promise<string>{return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result));r.onerror=reject;r.readAsDataURL(file);});}
 export function download(name:string,data:string,type:string){const url=URL.createObjectURL(new Blob([data],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),3000);}

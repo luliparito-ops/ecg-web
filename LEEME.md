@@ -35,11 +35,7 @@ Publicá el contenido de `dist` en un alojamiento estático HTTPS. La aplicació
 Esta versión NO incluye service worker, instalación PWA ni funcionamiento offline garantizado. No utiliza analítica, fuentes externas ni CDN de bibliotecas en ejecución; el worker PDF se distribuye con la app.
 
 ## Interfaz
-- Documento + arriba a la izquierda: abrir imagen/PDF, abrir sesión, recuperar sesión local y cambiar página.
-- Arriba derecha: deshacer, guardar/exportar y opciones.
-- Cápsula inferior izquierda: registros, RR y selección PR/QRS/QT.
-- Regla inferior derecha: calibración separada.
-- ECG como fondo; sin título de archivo permanente. Controles inspirados en la referencia visual del usuario, iconos SVG propios (no recursos oficiales SF Symbols).
+Lenguaje visual de Apple: modo claro/oscuro automático, materiales translúcidos, símbolos de trazo regular sin etiquetas y amarillo como color de acento. Arriba: abrir, páginas, deshacer, girar, grilla y exportar. Abajo: Medir, Calibrar y Medidas. Calibrar y medir muestran un botón amarillo ✓ para terminar.
 
 ## 1. Calibración
 Elegí Tiempo ↔. Un dedo mueve la grilla; dos dedos ajustan escala horizontal y posición al mismo tiempo. Altura ↕ es independiente; Proporcional mantiene la relación actual entre los ejes.
@@ -76,10 +72,8 @@ En un QT seleccionado: Añadir recta tangente. Arrastrá su cuerpo para X/Y; ext
 
 El comienzo del QRS sigue editable. Para T negativa, girá la recta a pendiente opuesta y ajustá su posición. La herramienta no decide cómo medir morfologías complejas ni su interpretación clínica. QT directo desactiva la tangente y vuelve al extremo directo guardado.
 
-## Sesiones y privacidad
-Una página activa por sesión: cambiar página o archivo reinicia medidas/calibración tras advertencia. Guardá antes. Sesión JSON incluye el PDF/imagen original (puede contener datos personales). Guardado local en IndexedDB es opcional, no automático, y puede borrarse en Opciones. Navegador privado/cuotas pueden impedir guardar; descargar sesión es alternativa. No hay cifrado propio del almacenamiento local.
-
-CSV incluye intervalos, calibración y QTc de las cuatro fórmulas. No incluye exportación gráfica del documento anotado ni PDF de informe en esta versión. Medidas y documento no se envían al alojamiento. El acceso a un sitio web sí genera las solicitudes normales de descarga de la app.
+## Privacidad
+No hay sesiones, guardado ni cuentas. Se abre una imagen, captura o PDF (también soltándolo o pegándolo con ⌘V), se mide y se exporta un CSV. Nada se envía ni se almacena.
 
 ## Límites de imagen/PDF
 Imagen hasta 60 MB/80 megapíxeles. Render PDF de página completa limitado a 4096 píxeles por lado y 12 millones de píxeles por bitmap. Tras el zoom se vuelve a renderizar con PDF.js; bajo el límite de memoria esto mejora nitidez. A zoom extremo no se promete recuperar detalle adicional. No implementa mosaicos ni extracción de señal vectorial PDF. PDF protegido por contraseña no incluye diálogo específico.
@@ -102,8 +96,6 @@ src/Stage.tsx: lienzo, gestos, grilla, calibres y lupa.
 src/App.tsx: herramientas, referencias, sesiones y paneles.
 src/PDFLayer.tsx: render PDF local con control de resolución.
 src/documents.ts: apertura y exportación.
-src/session.ts: validación del formato y recuperación.
-src/storage.ts: IndexedDB.
 src/model.test.ts: casos de cálculo y geometría.
 
 ## Prueba rápida con un archivo sin datos personales
