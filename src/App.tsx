@@ -457,12 +457,15 @@ export default function App(){
      ):activeBar==='measure'?(
       <>
        <div className="bar-group">{done(()=>{setTool('move');setSelected(null);setActiveBar('main');},'Listo')}</div>
-       {(canUndo||canRedo)&&(
-        <div className="capsule glass">
-         <Btn icon="undo" label="Deshacer" disabled={!canUndo} onPress={undo}/>
-         <Btn icon="redo" label="Rehacer" disabled={!canRedo} onPress={redo}/>
-        </div>
-       )}
+       <div className="bar-group">
+        {m&&<div className="capsule glass"><Btn icon="trash" label="Eliminar medida" className="danger" onPress={removeMeasure}/></div>}
+        {(canUndo||canRedo)&&(
+         <div className="capsule glass">
+          <Btn icon="undo" label="Deshacer" disabled={!canUndo} onPress={undo}/>
+          <Btn icon="redo" label="Rehacer" disabled={!canRedo} onPress={redo}/>
+         </div>
+        )}
+       </div>
       </>
      ):(
       <>
@@ -573,7 +576,6 @@ export default function App(){
            <Btn icon="plus" label="Alargar 1 ms" disabled={!!m.tangent} onPress={()=>nudgeMeasureEnd(1)}/>
           </div>
          </div>
-         <Btn icon="trash" label="Eliminar medida" className="danger trash" onPress={removeMeasure}/>
          {context&&<div className="ctx">{context}</div>}
         </section>
        )}
