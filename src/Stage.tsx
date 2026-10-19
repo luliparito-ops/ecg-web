@@ -9,9 +9,9 @@ export type Tool='move'|Kind|'previous'|'current';
 /** Un tono por tipo de medida: sobrios, con contraste ≥ 4,5:1 sobre papel blanco (≥ 3,4:1 sobre la grilla rosada). */
 export const KIND_COLOR:Record<Kind,string>={PR:'#1E7F45',QRS:'#B93C0A',QT:'#7B3AB0',RR:'#0A64A8'};
 /** Mismos tonos, mucho más saturados, para trazar sobre papel con grilla marcada. */
-export const KIND_COLOR_STRONG:Record<Kind,string>={PR:'#00A33F',QRS:'#F03C00',QT:'#8A1FE8',RR:'#0066FF'};
-export const QT_STAGE_STRONG=['#E67A00','#A33FF2','#7A0FD6'];
-export const LINE_WIDTHS=[['thin','Fino',.6],['normal','Normal',1],['thick','Grueso',1.8]] as const;
+export const KIND_COLOR_STRONG:Record<Kind,string>={PR:'#00B84A',QRS:'#FF3300',QT:'#9500FF',RR:'#0055FF'};
+export const QT_STAGE_STRONG=['#FF8000','#B02EFF','#8000F0'];
+export const LINE_WIDTHS=[['thin','Fino',1],['normal','Normal',1.6],['thick','Grueso',2.8]] as const;
 export type LineWidth=typeof LINE_WIDTHS[number][0];
 export const kindColor=(k:Kind,strong:boolean)=>(strong?KIND_COLOR_STRONG:KIND_COLOR)[k];
 /** El QT se tiñe según cuánto falta para su QTc: sin R (ámbar), una R (violeta medio), las dos R (violeta pleno). */

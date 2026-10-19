@@ -53,8 +53,8 @@ export default function App(){
  const [gridVisible,setGridVisible]=useState(false);
  const [rotation,setRotation]=useState(0);
  const [focus,setFocus]=useState(false);
- const [strong,setStrong]=useState(()=>pref('ecg-strong')==='1');
- const [lineWidth,setLineWidth]=useState<LineWidth>(()=>{const v=pref('ecg-line');return LINE_WIDTHS.some(x=>x[0]===v)?v as LineWidth:'normal';});
+ const [strong,setStrong]=useState(()=>pref('ecg-colores')!=='normales');
+ const [lineWidth,setLineWidth]=useState<LineWidth>(()=>{const v=pref('ecg-grosor');return LINE_WIDTHS.some(x=>x[0]===v)?v as LineWidth:'normal';});
  const [fitKey,setFitKey]=useState(0);
  const exportRef=useRef<(()=>Promise<Blob>)|null>(null);
  const [notice,setNotice]=useState('');
@@ -633,10 +633,10 @@ export default function App(){
         <PillSelect label="Fórmula de QTc" value={formula} options={FORMULAS} onChange={v=>setFormula(v as Formula)}/>
        </div>
        <div className="opt-row">
-        <span>Grosor de las líneas</span>
+        <span>Grosor</span>
         <div className="segmented" role="group" aria-label="Grosor de las líneas">
          {LINE_WIDTHS.map(([id,label])=>(
-          <button type="button" key={id} aria-pressed={lineWidth===id} className={'seg txt'+(lineWidth===id?' on':'')} onClick={()=>{setLineWidth(id);savePref('ecg-line',id);}}>{label}</button>
+          <button type="button" key={id} aria-pressed={lineWidth===id} className={'seg txt'+(lineWidth===id?' on':'')} onClick={()=>{setLineWidth(id);savePref('ecg-grosor',id);}}>{label}</button>
          ))}
         </div>
        </div>
@@ -644,7 +644,7 @@ export default function App(){
         <span>Colores</span>
         <div className="segmented" role="group" aria-label="Colores">
          {([[false,'Normales'],[true,'Intensos']] as const).map(([v,label])=>(
-          <button type="button" key={label} aria-pressed={strong===v} className={'seg txt'+(strong===v?' on':'')} onClick={()=>{setStrong(v);savePref('ecg-strong',v?'1':'0');}}>{label}</button>
+          <button type="button" key={label} aria-pressed={strong===v} className={'seg txt'+(strong===v?' on':'')} onClick={()=>{setStrong(v);savePref('ecg-colores',v?'intensos':'normales');}}>{label}</button>
          ))}
         </div>
        </div>
