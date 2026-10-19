@@ -399,7 +399,7 @@ input[type="range"] { accent-color: var(--tint); margin: 0; height: 28px; cursor
 }
 
 /* ZOOM / LUPA */
-.zoom-btn {
+.focus-btn {
   position: absolute;
   right: max(12px, var(--safe-r));
   top: calc(var(--safe-t) + 60px);
@@ -411,7 +411,9 @@ input[type="range"] { accent-color: var(--tint); margin: 0; height: 28px; cursor
   z-index: 35;
   animation: fade 0.25s var(--ease);
 }
-.zoom-btn svg.sf { width: 20px; height: 20px; }
+.focus-btn svg.sf { width: 20px; height: 20px; }
+.focus-btn.on { color: var(--tint-glyph); }
+.focus-btn:active { transform: scale(0.9); }
 .lens {
   position: absolute;
   left: max(16px, var(--safe-l));
@@ -504,3 +506,10 @@ input[type="range"] { accent-color: var(--tint); margin: 0; height: 28px; cursor
 .readout { flex-direction: row; align-items: baseline; justify-content: flex-start; gap: 10px; }
 .r-main { flex: none; }
 .r-sec { flex: 1; min-width: 0; line-height: 24px; }
+
+/* OPCIONES */
+.opt-list { border-radius: 12px; overflow: hidden; background: var(--fill); }
+.opt-row { width: 100%; min-height: 48px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 17px; text-align: left; color: var(--label); }
+.opt-row + .opt-row { box-shadow: inset 0 0.5px 0 var(--separator); }
+button.opt-row:active { background: var(--fill-2); }
+.opt-row svg.sf { width: 20px; height: 20px; color: var(--label-2); }

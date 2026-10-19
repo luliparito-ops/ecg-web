@@ -26,6 +26,8 @@ const paths:Record<string,React.ReactNode>={
  auto:<><path d="M10.5 4.5 12.2 9.3 17 11l-4.8 1.7-1.7 4.8-1.7-4.8L4 11l4.8-1.7Z"/><path d="M18 3.5v4M16 5.5h4M18.5 15.5v3.5M16.75 17.25h3.5"/></>,
  quad:<><path d="M6.5 6.5 18 5l-1.5 13L5 17Z" opacity=".6"/><circle cx="6.5" cy="6.5" r="1.9" fill="currentColor"/><circle cx="18" cy="5" r="1.9" fill="currentColor"/><circle cx="16.5" cy="18" r="1.9" fill="currentColor"/><circle cx="5" cy="17" r="1.9" fill="currentColor"/></>,
  opacity:<><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17Z" fill="currentColor" stroke="none"/></>,
+ options:<><path d="M4 7.5h9M17.5 7.5H20M4 16.5h2.5M11 16.5h9"/><circle cx="15.2" cy="7.5" r="2.2"/><circle cx="8.8" cy="16.5" r="2.2"/></>,
+ focus:<><path d="M4 9V6a2 2 0 0 1 2-2h3M15 4h3a2 2 0 0 1 2 2v3M20 15v3a2 2 0 0 1-2 2h-3M9 20H6a2 2 0 0 1-2-2v-3"/><circle cx="12" cy="12" r="2.6" fill="currentColor"/></>,
  photo:<><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m4 17 4.6-4.4a1.5 1.5 0 0 1 2.1 0L14 16l1.6-1.6a1.5 1.5 0 0 1 2.1 0L20 16.7"/></>
 };
 export default function Icon({name}:{name:string}){

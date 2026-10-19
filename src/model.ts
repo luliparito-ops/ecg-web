@@ -95,15 +95,21 @@ export function amplitudeMV(m:Measure,c:Calibration):number|null{
 }
 /** Número con coma decimal (español). */
 export const num=(n:number,d=0)=>n.toFixed(d).replace('.',',');
-export type Readout={kind:Kind;value:string|null;hint:string|null;secondary:string|null;amplitude:string|null};
+export type Readout={kind:Kind;value:string|null;hint:string|null;secondary:string|null;amplitude:string|null;qtc:string|null};
 export function readout(m:Measure,c:Calibration,f:Formula):Readout{
  const t=duration(m,c),mm=amplitudeMM(m,c),mv=amplitudeMV(m,c);
  const amplitude=mm===null||mv===null?null:`${num(mm,1)} mm · ${num(mv,2)} mV`;
- if(t===null)return {kind:m.kind,value:null,hint:c.confirmed?'revisar referencias':'sin calibrar',secondary:null,amplitude};
+ if(t===null)return {kind:m.kind,value:null,hint:c.confirmed?'revisar referencias':'sin calibrar',secondary:null,amplitude,qtc:null};
  let secondary:string|null=null;
  if(m.kind==='RR'&&t>0)secondary=`${num(60000/t)} lpm`;
- if(m.kind==='QT'){const r=previousRR(m,c),q=r===null?null:corrected(t,r,f);secondary=q===null?'QTc —':`QTc ${num(q)} ms`;}
- return {kind:m.kind,value:num(t),hint:null,secondary,amplitude};
+ let qtc:string|null=null;
+ if(m.kind==='QT'){const r=previousRR(m,c),q=r===null?null:corrected(t,r,f);qtc=q===null?null:num(q);secondary=q===null?'QTc —':`QTc ${qtc} ms`;}
+ return {kind:m.kind,value:num(t),hint:null,secondary,amplitude,qtc};
+}
+/** Avance de un QT hacia su QTc: 0 sin referencias R, 1 con una, 2 con las dos (QTc calculable). */
+export function qtStage(m:Measure,c:Calibration):0|1|2{
+ if(previousRR(m,c)!==null)return 2;
+ return m.rrPrevious!==undefined||m.rrCurrent!==undefined?1:0;
 }
 export function summary(m:Measure,c:Calibration,f:Formula):string {
  const r=readout(m,c,f);

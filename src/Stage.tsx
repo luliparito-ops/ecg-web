@@ -1,13 +1,16 @@
-import Icon from './Icons';
-import {useEffect,useId,useRef,useState,type PointerEvent as RPointerEvent,type ReactNode} from 'react';
+import {useEffect,useId,useRef,useState,type MutableRefObject,type PointerEvent as RPointerEvent,type ReactNode} from 'react';
+import {flushSync} from 'react-dom';
 import type {DocumentData} from './documents';
 import PDFLayer from './PDFLayer';
-import {clamp,copy,scaled,positions,intersection,readout,translate,setEdge,paperToImage,applyH,orderQuad,SQUARE_MM,type Axis,type Formula,type Kind,type Measure,type Point,type State} from './model';
+import {clamp,copy,scaled,positions,intersection,readout,qtStage,translate,setEdge,paperToImage,applyH,orderQuad,SQUARE_MM,type Axis,type Formula,type Kind,type Measure,type Point,type State} from './model';
 
 export type Tool='move'|Kind|'previous'|'current';
 
 /** Un tono por tipo de medida: sobrios, con contraste ≥ 4,5:1 sobre papel blanco (≥ 3,4:1 sobre la grilla rosada). */
 export const KIND_COLOR:Record<Kind,string>={PR:'#1E7F45',QRS:'#B93C0A',QT:'#7B3AB0',RR:'#0A64A8'};
+/** El QT se tiñe según cuánto falta para su QTc: sin R (ámbar), una R (violeta medio), las dos R (violeta pleno). */
+export const QT_STAGE_COLOR=['#A65F00','#9059C9','#6B2FA0'];
+export const measureColor=(m:Measure,c:State['calibration']):string=>m.kind==='QT'?QT_STAGE_COLOR[qtStage(m,c)]:KIND_COLOR[m.kind];
 
 type Camera={zoom:number;pan:Point};
 type Props={
@@ -29,6 +32,8 @@ type Props={
  onSelect:(id:string|null,keepTool?:boolean)=>void;
  onNotice:(s:string)=>void;
  onMarked?:()=>void;
+ fitKey?:number;
+ exportRef?:MutableRefObject<(()=>Promise<Blob>)|null>;
 };
 type Gesture={
  type:'nav'|'grid'|'create'|'edit'|'mark'|'qtap'|'qpoint';
@@ -44,6 +49,7 @@ type Gesture={
  id?:string;
  draft?:Measure;
  ext?:boolean;
+ anchor?:Point;
 };
 
 /* Medidas en píxeles de pantalla (independientes del zoom). */
@@ -72,19 +78,22 @@ function textWidth(text:string,weight=500,size=PILL_FONT){
 }
 
 export default function Stage(props:Props){
- const {doc,state,tool,calibrating,calMode,quad,axis,selected,formula,gridVisible,opacity,rotation}=props;
+ const {doc,state,tool,calibrating,calMode,quad,axis,formula,gridVisible,opacity,rotation}=props;
  const quadMode=calibrating&&calMode==='quad';
+ const [forced,setForced]=useState<number|null>(null);
+ // Al exportar se dibuja sin selección ni bloqueos.
+ const selected=forced===null?props.selected:null;
  const svg=useRef<SVGSVGElement>(null),group=useRef<SVGGElement>(null),host=useRef<HTMLDivElement>(null);
  const [size,setSize]=useState({w:390,h:844}),[camera,setCamera]=useState<Camera>({zoom:1,pan:{x:0,y:0}}),[draft,setDraft]=useState<Measure|null>(null),[lens,setLens]=useState<Point|null>(null);
  const [dpr,setDpr]=useState(()=>typeof window==='undefined'?2:window.devicePixelRatio||1);
  const [active,setActive]=useState<{id:string;target:string}|null>(null);
  const [settle,setSettle]=useState<{id:string;target:string;key:number}|null>(null);
  const pointers=useRef(new Map<number,Point>()),gesture=useRef<Gesture|null>(null),timer=useRef<ReturnType<typeof setTimeout>>(),longActive=useRef(false);
- const isSpacePressed=useRef(false),rrHint=useRef(false);
+ const isSpacePressed=useRef(false),rrHint=useRef(false),grab=useRef<{id:string;side:1|2}|null>(null);
 
  const isQuarterTurn=(rotation%180)!==0;
  const effectiveW=isQuarterTurn?doc.height:doc.width,effectiveH=isQuarterTurn?doc.width:doc.height;
- const fit=Math.min(size.w/effectiveW,size.h/effectiveH)*.96,scale=fit*camera.zoom;
+ const fit=Math.min(size.w/effectiveW,size.h/effectiveH)*.96,scale=forced??fit*camera.zoom;
  const id=useId().replace(/:/g,''),contentID='content'+id;
 
  useEffect(()=>{
@@ -103,6 +112,8 @@ export default function Stage(props:Props){
   setCamera({zoom:1,pan:{x:0,y:0}});
   pointers.current.clear();gesture.current=null;setDraft(null);
  },[doc,rotation]);
+
+ useEffect(()=>{if(props.fitKey)setCamera({zoom:1,pan:{x:0,y:0}});},[props.fitKey]);
 
  useEffect(()=>{
   const onKeyDown=(e:KeyboardEvent)=>{
@@ -139,9 +150,21 @@ export default function Stage(props:Props){
   };
  };
 
+ /** Punto de pantalla donde se cruzan la barra horizontal y la mordaza del lado agarrado de la medida elegida: el zoom parte de ahí. */
+ function anchorFor(mid:Point):Point|null{
+  if(calibrating||!props.selected)return null;
+  const m=state.measures.find(x=>x.id===props.selected),ctm=group.current?.getScreenCTM();
+  if(!m||!ctm)return null;
+  const xb=intersection(m)??m.x2,g=grab.current;
+  let side:1|2;
+  if(g&&g.id===m.id)side=g.side;
+  else{const p=local(mid);side=Math.abs(p.x-m.x1)<=Math.abs(p.x-xb)?1:2;}
+  const q=new DOMPoint(side===1?m.x1:xb,m.y).matrixTransform(ctm);
+  return {x:q.x,y:q.y};
+ }
  function startNavigation(){
-  const ids=[...pointers.current.keys()].slice(0,2),m=metrics(ids);
-  gesture.current={type:calibrating&&calMode==='grid'?'grid':'nav',ids,...m,camera:copy(camera),before:copy(state),start:local(m.mid)};
+  const ids=[...pointers.current.keys()].slice(0,2),m=metrics(ids),isGrid=calibrating&&calMode==='grid';
+  gesture.current={type:isGrid?'grid':'nav',ids,...m,camera:copy(camera),before:copy(state),start:local(m.mid),anchor:isGrid?undefined:anchorFor(m.mid)??undefined};
  }
  function stopLens(){if(timer.current)clearTimeout(timer.current);longActive.current=false;setLens(null);}
 
@@ -188,10 +211,12 @@ export default function Stage(props:Props){
   }else if(handle&&mid){
    props.onSelect(mid);
    const t=handle.getAttribute('data-handle')||'move';
+   grab.current=/^x([12])/.test(t)?{id:mid,side:t[1]==='1'?1:2}:null;
    gesture.current={type:'edit',ids:[e.pointerId],mid:p,distance:0,camera:copy(camera),before:copy(state),start:point,target:t,id:mid};
    setActive({id:mid,target:t});
   }else if(mid){
    props.onSelect(mid);
+   grab.current=null;
    gesture.current={type:'edit',ids:[e.pointerId],mid:p,distance:0,camera:copy(camera),before:copy(state),start:point,target:'move',id:mid};
    setActive({id:mid,target:'move'});
   }else if(['PR','QRS','QT','RR'].includes(tool)){
@@ -280,7 +305,8 @@ export default function Stage(props:Props){
    const z=clamp(g.camera.zoom*ratio,.3,100),r=z/g.camera.zoom;
    const rect=svg.current!.getBoundingClientRect();
    const center={x:rect.left+size.w/2,y:rect.top+size.h/2};
-   setCamera({zoom:z,pan:{x:m.mid.x-center.x-(g.mid.x-center.x-g.camera.pan.x)*r,y:m.mid.y-center.y-(g.mid.y-center.y-g.camera.pan.y)*r}});
+   const a=g.anchor,o=a??g.mid,t=a?{x:a.x+m.mid.x-g.mid.x,y:a.y+m.mid.y-g.mid.y}:m.mid;
+   setCamera({zoom:z,pan:{x:t.x-center.x-(o.x-center.x-g.camera.pan.x)*r,y:t.y-center.y-(o.y-center.y-g.camera.pan.y)*r}});
   }else if(g.type==='create'&&g.draft){
    g.draft={...g.draft,x2:point.x};setDraft(g.draft);
   }else if(g.type==='edit'||g.type==='mark'){
@@ -362,7 +388,7 @@ export default function Stage(props:Props){
  },[state,calibrating,selected,props.onChange,props.onCommit]);
 
  /* ---------- Geometría de pantalla ---------- */
- const creatingKind=['PR','QRS','QT','RR'].includes(tool);
+ const creatingKind=forced===null&&['PR','QRS','QT','RR'].includes(tool);
  const unit=1/Math.max(scale,.00001);
  // Trazo principal: 2 px físicos en pantallas retina (1 px en las de densidad 1). Auxiliar: 1 px físico.
  const MAIN=Math.max(1,Math.round(dpr*.75))/dpr,HAIR=1/dpr;
@@ -411,13 +437,14 @@ export default function Stage(props:Props){
  };
 
  function renderMeasure(m:Measure,isDraft:boolean){
-  const chosen=m.id===selected&&!calibrating&&!isDraft,c=KIND_COLOR[m.kind],end=intersection(m),xb=end??m.x2,xa=m.x1;
+  const chosen=m.id===selected&&!calibrating&&!isDraft,c=measureColor(m,state.calibration),end=intersection(m),xb=end??m.x2,xa=m.x1;
   const H=JAW*unit,left=Math.min(xa,xb),right=Math.max(xa,xb),gap=(right-left)*scale;
   const rr=m.kind==='RR',topY=m.top!==undefined?m.top:m.y-H,botY=m.bottom!==undefined?m.bottom:m.y+H;
   const X1=sx(xa,MAIN),X2=sx(xb,MAIN),Y=sy(m.y,MAIN),T=sy(topY,MAIN),B=sy(botY,MAIN),ext=6*unit;
   const r=readout(m,state.calibration,formula);
   // En el lienzo solo el valor principal: QTc, lpm y mm quedan en el panel para no tapar el trazado.
-  const value=r.value===null?'—':`${r.value} ms`;
+  // En QT la píldora muestra el QTc en cuanto se puede calcular.
+  const useQtc=m.kind==='QT'&&r.qtc!==null,value=useQtc?`${r.qtc} ms`:r.value===null?'—':`${r.value} ms`;
   let d=`M${X1} ${T}V${B}M${X2} ${T}V${B}M${X1} ${Y}H${X2}`;
   if(m.top!==undefined)d+=`M${Math.min(X1,X2)-ext} ${T}H${Math.max(X1,X2)+ext}`;
   if(m.bottom!==undefined)d+=`M${Math.min(X1,X2)-ext} ${B}H${Math.max(X1,X2)+ext}`;
@@ -442,7 +469,7 @@ export default function Stage(props:Props){
   parts.push(<path key="main" d={d} stroke={c} strokeWidth={MAIN*unit} strokeLinecap="square" fill="none" pointerEvents="none"/>);
 
   if(m.kind==='QT'){
-   const refs:[number|undefined,string,string][]=[[m.rrPrevious,'previous','R ant.'],[m.rrCurrent,'current','R']];
+   const refs:[number|undefined,string,string][]=[[m.rrPrevious,'previous','R▸'],[m.rrCurrent,'current','◂R']];
    for(const [x,name,label] of refs){
     if(x===undefined)continue;
     const X=sx(x,HAIR);
@@ -471,7 +498,7 @@ export default function Stage(props:Props){
   }
 
   // Valor: píldora sobre las mordazas; en RR extendido, la amplitud va al costado de la mordaza derecha.
-  parts.push(<g key="pill">{pill(mx,Math.min(T,B)-(8+PILL_H/2)*unit,value,c,m.kind,isDraft||calibrating?null:'move',m)}</g>);
+  parts.push(<g key="pill">{pill(mx,Math.min(T,B)-(8+PILL_H/2)*unit,value,c,useQtc?'QTc':m.kind,isDraft||calibrating?null:'move',m)}</g>);
 
   if(chosen){
    // Manijas solo en los cuatro extremos de las líneas: el punto de medida queda libre.
@@ -498,6 +525,28 @@ export default function Stage(props:Props){
 
   return <g key={m.id} data-measure={isDraft?undefined:m.id} opacity={calibrating?.3:dim?.3:1} pointerEvents={dim||calibrating?'none':undefined} style={{transition:'opacity .2s'}}>{parts}</g>;
  }
+
+ /** Documento con las medidas dibujadas, a resolución del original (hasta 4096 px). */
+ async function exportImage():Promise<Blob>{
+  const S=Math.min(doc.kind==='pdf'?3:1,4096/Math.max(doc.width,doc.height)),W=Math.round(doc.width*S),H=Math.round(doc.height*S);
+  const canvas=document.createElement('canvas');canvas.width=W;canvas.height=H;
+  const ctx=canvas.getContext('2d');if(!ctx)throw Error('No se pudo crear la imagen.');
+  ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H);
+  if(doc.kind==='pdf'&&doc.pdf){
+   const pg=await doc.pdf.getPage(doc.page);
+   await pg.render({canvasContext:ctx,viewport:pg.getViewport({scale:S}),background:'white'}).promise;
+  }else{
+   const im=new Image();im.src=doc.url;await im.decode();ctx.drawImage(im,0,0,W,H);
+  }
+  flushSync(()=>setForced(1000/doc.width));
+  const nodes=[...(group.current?.querySelectorAll(':scope > g > g[data-measure]')||[])].map(n=>n.outerHTML).join('');
+  flushSync(()=>setForced(null));
+  const markup=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${doc.width} ${doc.height}" width="${W}" height="${H}">${nodes}</svg>`;
+  const ov=new Image();ov.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(markup);await ov.decode();
+  ctx.drawImage(ov,0,0,W,H);
+  return await new Promise<Blob>((ok,fail)=>canvas.toBlob(b=>b?ok(b):fail(Error('No se pudo generar la imagen.')),'image/png'));
+ }
+ if(props.exportRef)props.exportRef.current=exportImage;
 
  const showGrid=(calibrating&&calMode==='grid')||gridVisible;
  const ordered=quad.length===4?orderQuad(quad):quad;
@@ -531,7 +580,7 @@ export default function Stage(props:Props){
     onWheel={e=>{
      e.preventDefault();
      if(pointers.current.size)return;
-     const p={x:e.clientX,y:e.clientY},r=Math.exp(clamp(-e.deltaY*.002,-2,2));
+     const cursor={x:e.clientX,y:e.clientY},p=anchorFor(cursor)??cursor,r=Math.exp(clamp(-e.deltaY*.002,-2,2));
      if(calibrating&&calMode==='grid'){
       const point=local(p);
       props.onChange({...state,calibration:scaled(state.calibration,r,point,point,axis)});
@@ -599,9 +648,6 @@ export default function Stage(props:Props){
     );
    })()}
 
-   {(camera.zoom!==1||camera.pan.x!==0||camera.pan.y!==0)&&(
-    <button type="button" className="zoom-btn glass" aria-label="Ajustar a pantalla" title="Ajustar a pantalla" onClick={()=>setCamera({zoom:1,pan:{x:0,y:0}})}><Icon name="fit"/></button>
-   )}
   </div>
  );
 }

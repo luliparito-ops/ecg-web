@@ -1,14 +1,14 @@
 import {createContext,useCallback,useContext,useEffect,useRef,useState,type CSSProperties} from 'react';
-import Stage,{KIND_COLOR,type Tool} from './Stage';
+import Stage,{KIND_COLOR,measureColor,type Tool} from './Stage';
 import Icon from './Icons';
 import {loadDocument,download,pageText,type DocumentData} from './documents';
-import {copy,scaled,validCalibration,initialCalibration,readout,translate,measuresCSV,parseGain,gainOf,FORMULAS,orderQuad,quadProblem,axisAligned,quadCalibration,SQUARE_MM,type Point,type State,type Axis,type Kind,type Formula,type Measure} from './model';
+import {copy,scaled,validCalibration,initialCalibration,readout,translate,measuresCSV,summary,parseGain,gainOf,FORMULAS,orderQuad,quadProblem,axisAligned,quadCalibration,SQUARE_MM,type Point,type State,type Axis,type Kind,type Formula,type Measure} from './model';
 import {rectify} from './rectify';
 import {detectDocument} from './autogrid';
 import {pageScale,gridDeviation,PT_PER_MM} from './pdfvector';
 
 type ActiveBar='main'|'measure'|'cal';
-type ModalSheet='records'|null;
+type ModalSheet='records'|'options'|null;
 const KINDS:Kind[]=['PR','QRS','QT','RR'];
 const SPEEDS=['25','50'],GAINS=['5','10','20'];
 const newState=():State=>({calibration:initialCalibration(),measures:[]});
@@ -49,6 +49,9 @@ export default function App(){
  const [opacity,setOpacity]=useState(.55);
  const [gridVisible,setGridVisible]=useState(false);
  const [rotation,setRotation]=useState(0);
+ const [focus,setFocus]=useState(false);
+ const [fitKey,setFitKey]=useState(0);
+ const exportRef=useRef<(()=>Promise<Blob>)|null>(null);
  const [notice,setNotice]=useState('');
  const [busy,setBusy]=useState(false);
  const [speedText,setSpeedText]=useState('25');
@@ -348,10 +351,26 @@ export default function App(){
   }
  }
 
- function csv(){
-  if(!doc||!allowed())return;
-  download('medidas-ecg.csv',measuresCSV(state),'text/csv;charset=utf-8');
-  notify('CSV descargado');
+ /** Comparte el documento con las medidas dibujadas (PNG) y la tabla (CSV); sin menú de compartir, los descarga. */
+ async function share(){
+  if(!doc||!allowed()||!exportRef.current)return;
+  setBusy(true);
+  try{
+   const png=await exportRef.current(),base=doc.file.name.replace(/\.[^.]+$/,'')||'ecg';
+   const files=[new File([png],`${base}-medidas.png`,{type:'image/png'}),new File([measuresCSV(state)],`${base}-medidas.csv`,{type:'text/csv'})];
+   const text=state.measures.map(x=>summary(x,state.calibration,formula)).join('\n');
+   if(navigator.canShare?.({files})){
+    try{await navigator.share({files,title:'Medidas ECG',text});}
+    catch(e){if(!(e instanceof DOMException&&e.name==='AbortError'))throw e;}
+   }else{
+    for(const f of files){const u=URL.createObjectURL(f),a=document.createElement('a');a.href=u;a.download=f.name;a.click();setTimeout(()=>URL.revokeObjectURL(u),3000);}
+    notify('Imagen y tabla descargadas');
+   }
+  }catch(e){
+   notify(e instanceof Error?e.message:'No se pudo compartir.');
+  }finally{
+   setBusy(false);
+  }
  }
 
  function tangent(){
@@ -383,9 +402,8 @@ export default function App(){
 
  const context=m&&m.kind==='QT'?(
   <>
-   <PillSelect label="Fórmula de QTc" value={formula} options={FORMULAS} onChange={v=>setFormula(v as Formula)}/>
    <div className="chips" role="group" aria-label="Referencias R para QTc">
-    {([['current','R','R de este QT',m.rrCurrent],['previous','R ant.','R anterior',m.rrPrevious]] as const).map(([t,txt,label,v])=>(
+    {([['previous','R▸','R anterior (apunta a la R de este QT)',m.rrPrevious],['current','◂R','R de este QT (apunta a la R anterior)',m.rrCurrent]] as const).map(([t,txt,label,v])=>(
      <button key={t} type="button" aria-label={label} title={label} aria-pressed={tool===t} className={'chip'+(tool===t?' on':'')+(v!==undefined?' set':'')} onClick={()=>{setTool(tool===t?'move':t);if(tool!==t)notify(t==='current'?'Tocá la R de este QT':'Tocá la R anterior');}}>{txt}</button>
     ))}
    </div>
@@ -435,6 +453,8 @@ export default function App(){
      onSelect={selectMeasure}
      onNotice={notify}
      onMarked={()=>setTool('move')}
+     fitKey={fitKey}
+     exportRef={exportRef}
     />
    ):(
     <div className="empty">
@@ -450,7 +470,7 @@ export default function App(){
 
    <input ref={fileInput} type="file" accept="image/*,application/pdf" hidden onChange={e=>{const f=e.target.files?.[0];e.target.value='';if(f)void openFile(f);}}/>
 
-   {doc&&(
+   {doc&&!focus&&(
     <header className="top-bar">
      {activeBar==='cal'?(
       <div className="bar-group">{done(()=>void applyCalibration(),'Listo')}<div className="capsule glass"><Btn icon="close" label="Cancelar" className="plain" onPress={cancelCalibration}/></div></div>
@@ -458,7 +478,10 @@ export default function App(){
       <>
        <div className="bar-group">{done(()=>{setTool('move');setSelected(null);setActiveBar('main');},'Listo')}</div>
        <div className="bar-group">
-        {m&&<div className="capsule glass"><Btn icon="trash" label="Eliminar medida" className="danger" onPress={removeMeasure}/></div>}
+        <div className="capsule glass">
+         {m&&<Btn icon="trash" label="Eliminar medida" className="danger" onPress={removeMeasure}/>}
+         <Btn icon="options" label="Opciones" onPress={()=>setModal('options')}/>
+        </div>
         {(canUndo||canRedo)&&(
          <div className="capsule glass">
           <Btn icon="undo" label="Deshacer" disabled={!canUndo} onPress={undo}/>
@@ -487,9 +510,9 @@ export default function App(){
          </div>
         )}
         <div className="capsule glass">
-         <Btn icon="rotate" label="Girar" onPress={()=>setRotation(r=>(r+90)%360)}/>
+         <Btn icon="options" label="Opciones" onPress={()=>setModal('options')}/>
          <Btn icon="grid" label="Grilla" active={gridVisible} onPress={()=>setGridVisible(v=>!v)}/>
-         {state.measures.length>0&&<Btn icon="share" label="Exportar CSV" onPress={csv}/>}
+         {state.measures.length>0&&<Btn icon="share" label="Compartir documento con medidas" onPress={()=>void share()}/>}
         </div>
        </div>
       </>
@@ -497,10 +520,14 @@ export default function App(){
     </header>
    )}
 
+   {doc&&(
+    <button type="button" className={'focus-btn glass'+(focus?' on':'')} aria-label={focus?'Mostrar botones':'Concentrarme en las medidas'} title={focus?'Mostrar botones':'Concentrarme en las medidas'} aria-pressed={focus} onClick={()=>setFocus(f=>!f)}><Icon name="focus"/></button>
+   )}
+
    {notice&&<div key={notice} className="toast glass" role="status">{notice}</div>}
    {busy&&<div className="spinner" role="status" aria-label="Procesando"/>}
 
-   {doc&&(
+   {doc&&!focus&&(
     <div className="bottom">
      {activeBar==='main'&&(
       <nav className="capsule glass dock" aria-label="Herramientas">
@@ -558,13 +585,13 @@ export default function App(){
      {activeBar==='measure'&&(
       <>
        {m&&r&&(
-        <section className={'card glass hud'+(context?' has-ctx':'')} aria-label="Medida seleccionada" style={{'--kind':KIND_COLOR[m.kind]} as CSSProperties}>
+        <section className={'card glass hud'+(context?' has-ctx':'')} aria-label="Medida seleccionada" style={{'--kind':measureColor(m,state.calibration)} as CSSProperties}>
          <output className="readout" aria-live="polite">
           <span className="r-main">
-           <span className="r-kind">{m.kind}</span>
-           {r.value!==null?<><span className="r-num">{r.value}</span><span className="r-unit">ms</span></>:<span className="r-hint">{r.hint}</span>}
+           <span className="r-kind">{r.qtc!==null?'QTc':m.kind}</span>
+           {(r.qtc??r.value)!==null?<><span className="r-num">{r.qtc??r.value}</span><span className="r-unit">ms</span></>:<span className="r-hint">{r.hint}</span>}
           </span>
-          {(()=>{const sec=r.secondary;return sec?<span className="r-sec">{sec}</span>:null;})()}
+          {(()=>{const sec=r.qtc!==null?`QT ${r.value} ms · ${formula}`:r.secondary;return sec?<span className="r-sec">{sec}</span>:null;})()}
          </output>
          <div className="nudge">
           <div className="stepper" role="group" aria-label="Mover 1 ms">
@@ -586,6 +613,22 @@ export default function App(){
        </nav>
       </>
      )}
+    </div>
+   )}
+
+   {modal==='options'&&(
+    <div className="backdrop" onClick={()=>setModal(null)}>
+     <section className="sheet glass" onClick={e=>e.stopPropagation()} aria-label="Opciones" role="dialog">
+      <div className="grabber"/>
+      <div className="opt-list">
+       <div className="opt-row">
+        <span>Fórmula de QTc</span>
+        <PillSelect label="Fórmula de QTc" value={formula} options={FORMULAS} onChange={v=>setFormula(v as Formula)}/>
+       </div>
+       <button type="button" className="opt-row" onClick={()=>setRotation(r=>(r+90)%360)}><span>Girar el lienzo 90°</span><Icon name="rotate"/></button>
+       <button type="button" className="opt-row" onClick={()=>{setFitKey(k=>k+1);setModal(null);}}><span>Ajustar a pantalla</span><Icon name="fit"/></button>
+      </div>
+     </section>
     </div>
    )}
 

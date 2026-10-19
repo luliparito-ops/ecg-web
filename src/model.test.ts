@@ -1,6 +1,6 @@
 import {parseSpeed,latticePitch,gridDeviation,PT_PER_MM} from './pdfvector';
 import {describe,it,expect} from 'vitest';
-import {initialCalibration,scaled,timeMS,corrected,intersection,previousRR,duration,positions,homography,applyH,invertH,orderQuad,quadProblem,axisAligned,quadCalibration,paperToImage,translate,setEdge,normalizeMeasure,amplitudeUnits,amplitudeMM,amplitudeMV,parseGain,gainOf,readout,summary,measuresCSV,copy,type Measure} from './model';
+import {initialCalibration,scaled,timeMS,corrected,intersection,previousRR,duration,positions,homography,applyH,invertH,orderQuad,quadProblem,axisAligned,quadCalibration,paperToImage,translate,setEdge,normalizeMeasure,amplitudeUnits,amplitudeMM,amplitudeMV,parseGain,gainOf,readout,summary,measuresCSV,qtStage,copy,type Measure} from './model';
 const c={...initialCalibration(),sx:10,sy:7,confirmed:true};
 describe('Motor ECG',()=>{
  it('convierte distancia sin depender de zoom o escala Y',()=>{expect(timeMS(250,c)).toBe(1000);expect(timeMS(250,{...c,sy:.001})).toBe(1000);});
@@ -97,5 +97,13 @@ describe('Motor ECG',()=>{
    expect(row[head.indexOf('"amplitud_mm"')]).toBe('"13.75"');expect(row[head.indexOf('"amplitud_mV"')]).toBe('"1.375"');
    expect(csv[csv.length-1].split(',')[head.indexOf('"amplitud_mm"')]).toBe('""');
   });
+ });
+ it('QT: el avance y el QTc dependen de las dos R',()=>{
+  const m:Measure={id:'q',kind:'QT',x1:0,x2:400,y:0,projection:false};
+  expect(qtStage(m,c)).toBe(0);expect(readout(m,c,'Bazett').qtc).toBeNull();
+  m.rrCurrent=100;expect(qtStage(m,c)).toBe(1);
+  m.rrPrevious=-150;expect(qtStage(m,c)).toBe(2);
+  // QT 1600 ms, RR 1000 ms: Bazett deja el QT igual.
+  expect(readout(m,{...c,sx:10,speed:25},'Bazett').qtc).not.toBeNull();
  });
 });
