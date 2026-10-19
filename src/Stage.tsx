@@ -325,8 +325,10 @@ export default function Stage(props:Props){
   return null;
  }
  function tapSelect(pt:Point){
+  // Con una medida en foco las demás están bloqueadas: se cambia de medida con Listo o desde la lista.
+  if(selected)return;
   const id=hitMeasure(pt);
-  if(id&&id!==selected)props.onSelect(id);
+  if(id)props.onSelect(id);
  }
 
  function up(e:RPointerEvent<SVGSVGElement>){
@@ -373,7 +375,7 @@ export default function Stage(props:Props){
  useEffect(()=>{
   const key=(e:KeyboardEvent)=>{
    const tag=(e.target as HTMLElement)?.tagName;
-   if(['INPUT','TEXTAREA','SELECT'].includes(tag)||calibrating||!selected||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key))return;
+   if(['INPUT','TEXTAREA','SELECT'].includes(tag)||calibrating||!selected||tool!=='move'||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key))return;
    e.preventDefault();
    const next=copy(state),m=next.measures.find(m=>m.id===selected);
    if(!m)return;
@@ -388,6 +390,7 @@ export default function Stage(props:Props){
  },[state,calibrating,selected,props.onChange,props.onCommit]);
 
  /* ---------- Geometría de pantalla ---------- */
+ const markMode=forced===null&&(tool==='previous'||tool==='current');
  const creatingKind=forced===null&&['PR','QRS','QT','RR'].includes(tool);
  const unit=1/Math.max(scale,.00001);
  // Trazo principal: 2 px físicos en pantallas retina (1 px en las de densidad 1). Auxiliar: 1 px físico.
@@ -465,7 +468,6 @@ export default function Stage(props:Props){
    const p=positions(xa,xb-xa,doc.width).filter(x=>Math.abs(x-xa)>unit&&Math.abs(x-xb)>unit);
    if(p.length)parts.push(<path key="proj" d={p.map(x=>`M${sx(x,HAIR)} ${T}V${B}`).join('')} stroke={c} strokeWidth={HAIR*unit} strokeDasharray={`${3*unit} ${3*unit}`} opacity=".75" fill="none" pointerEvents="none"/>);
   }
-  parts.push(<path key="halo" d={d} stroke={HALO} strokeWidth={(MAIN+2)*unit} strokeLinecap="square" fill="none" pointerEvents="none"/>);
   parts.push(<path key="main" d={d} stroke={c} strokeWidth={MAIN*unit} strokeLinecap="square" fill="none" pointerEvents="none"/>);
 
   if(m.kind==='QT'){
@@ -473,7 +475,7 @@ export default function Stage(props:Props){
    for(const [x,name,label] of refs){
     if(x===undefined)continue;
     const X=sx(x,HAIR);
-    parts.push(<g key={name} pointerEvents="none"><path d={`M${X} ${m.y-H}V${rBot}`} stroke={HALO} strokeWidth={(HAIR+1.5)*unit}/><path d={`M${X} ${m.y-H}V${rBot}`} stroke={c} strokeWidth={HAIR*unit} strokeDasharray={name==='previous'?`${3*unit} ${2*unit}`:undefined}/>{rLabel(x,label)}</g>);
+    parts.push(<g key={name} pointerEvents="none"><path d={`M${X} ${m.y-H}V${rBot}`} stroke={c} strokeWidth={HAIR*unit} strokeDasharray={name==='previous'?`${3*unit} ${2*unit}`:undefined}/>{rLabel(x,label)}</g>);
    }
    if(m.rrPrevious!==undefined&&m.rrCurrent!==undefined){
     const yy=sy(rKnob,HAIR);
@@ -485,22 +487,22 @@ export default function Stage(props:Props){
    const t=m.tangent,Bs=sy(t.base,HAIR);
    parts.push(<path key="base" d={`M${Math.max(0,left-H)} ${Bs}H${Math.min(doc.width,right+H*2)}`} stroke={INK} strokeWidth={HAIR*unit} opacity=".85" pointerEvents="none"/>);
    if(end!==null)parts.push(<path key="ext" d={`M${t.b.x} ${t.b.y}L${end} ${t.base}`} stroke={c} strokeWidth={HAIR*unit} strokeDasharray={`${3*unit} ${2*unit}`} pointerEvents="none"/>);
-   parts.push(<path key="thalo" d={`M${t.a.x} ${t.a.y}L${t.b.x} ${t.b.y}`} stroke={HALO} strokeWidth={(MAIN+2)*unit} pointerEvents="none"/>);
-   parts.push(<path key="tan" d={`M${t.a.x} ${t.a.y}L${t.b.x} ${t.b.y}`} stroke={c} strokeWidth={MAIN*unit} pointerEvents="none"/>);
+    parts.push(<path key="tan" d={`M${t.a.x} ${t.a.y}L${t.b.x} ${t.b.y}`} stroke={c} strokeWidth={MAIN*unit} pointerEvents="none"/>);
    if(end!==null)parts.push(<circle key="cross" cx={end} cy={t.base} r={3*unit} fill="#fff" stroke={c} strokeWidth={MAIN*unit} pointerEvents="none"/>);
   }
 
 
-  if(!calibrating&&!isDraft){
+  // Mientras se marca una R, el calibre queda bloqueado: solo la R puede cambiar.
+  if(!calibrating&&!isDraft&&!markMode){
    parts.push(<rect key="hmove" data-handle="move" data-measure={m.id} x={left} y={m.y-16*unit} width={right-left} height={32*unit} fill="transparent" style={{cursor:chosen?'grab':'pointer'}}/>);
    parts.push(jawRect(xa,-dir,'x1'));
    if(!m.tangent)parts.push(jawRect(xb,dir,'x2'));
   }
 
   // Valor: píldora sobre las mordazas; en RR extendido, la amplitud va al costado de la mordaza derecha.
-  parts.push(<g key="pill">{pill(mx,Math.min(T,B)-(8+PILL_H/2)*unit,value,c,useQtc?'QTc':m.kind,isDraft||calibrating?null:'move',m)}</g>);
+  parts.push(<g key="pill">{pill(mx,Math.min(T,B)-(8+PILL_H/2)*unit,value,c,useQtc?'QTc':m.kind,isDraft||calibrating||markMode?null:'move',m)}</g>);
 
-  if(chosen){
+  if(chosen&&!markMode){
    // Manijas solo en los cuatro extremos de las líneas: el punto de medida queda libre.
    const ends:[number,number,number,string,string][]=[[xa,X1,-dir,'x1',''],...(m.tangent?[]:[[xb,X2,dir,'x2','']] as [number,number,number,string,string][])];
    for(const [x,X,sgn,nm] of ends){
