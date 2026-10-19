@@ -56,7 +56,7 @@ type Gesture={
  target?:string;
  id?:string;
  draft?:Measure;
- ext?:boolean;
+ axis?:'x'|'y';
  anchor?:Point;
 };
 
@@ -264,9 +264,12 @@ export default function Stage(props:Props){
   }
   const end=/^x([12])([tb])$/.exec(g.target||'');
   if(end){
-   // Desde un extremo la línea se mueve en horizontal; un gesto vertical claro pasa al modo de extensión.
-   if(!g.ext&&Math.abs(dy*scale)>26&&Math.abs(dy)>2*Math.abs(dx))g.ext=true;
-   if(g.ext){
+   // Desde un extremo: hacia los costados se mueve el calibre (eje X); hacia arriba o abajo se extiende esa línea (eje Y). El eje se fija con el primer movimiento claro.
+   if(!g.axis){
+    if(Math.hypot(dx,dy)*scale<6)return next;
+    g.axis=Math.abs(dy)>Math.abs(dx)?'y':'x';
+   }
+   if(g.axis==='y'){
     if(end[2]==='t')setEdge(m,'top',(b.top??b.y-JAW*u)+dy,4*u);else setEdge(m,'bottom',(b.bottom??b.y+JAW*u)+dy,4*u);
    }else if(end[1]==='1')m.x1=b.x1+dx;else m.x2=b.x2+dx;
    return next;
