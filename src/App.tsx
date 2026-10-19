@@ -1,5 +1,5 @@
 import {createContext,useCallback,useContext,useEffect,useRef,useState,type CSSProperties} from 'react';
-import Stage,{KIND_COLOR,measureColor,type Tool} from './Stage';
+import Stage,{kindColor,measureColor,LINE_WIDTHS,type LineWidth,type Tool} from './Stage';
 import Icon from './Icons';
 import {loadDocument,download,pageText,type DocumentData} from './documents';
 import {copy,scaled,validCalibration,initialCalibration,readout,translate,measuresCSV,summary,parseGain,gainOf,FORMULAS,orderQuad,quadProblem,axisAligned,quadCalibration,SQUARE_MM,type Point,type State,type Axis,type Kind,type Formula,type Measure} from './model';
@@ -11,6 +11,9 @@ type ActiveBar='main'|'measure'|'cal';
 type ModalSheet='records'|'options'|null;
 const KINDS:Kind[]=['PR','QRS','QT','RR'];
 const SPEEDS=['25','50'],GAINS=['5','10','20'];
+/** Preferencias de este navegador (el almacenamiento puede no estar disponible). */
+const pref=(k:string)=>{try{return localStorage.getItem(k);}catch{return null;}};
+const savePref=(k:string,v:string)=>{try{localStorage.setItem(k,v);}catch{/* sin almacenamiento: vale solo en esta sesión */}};
 const newState=():State=>({calibration:initialCalibration(),measures:[]});
 const Busy=createContext(false);
 
@@ -50,6 +53,8 @@ export default function App(){
  const [gridVisible,setGridVisible]=useState(false);
  const [rotation,setRotation]=useState(0);
  const [focus,setFocus]=useState(false);
+ const [strong,setStrong]=useState(()=>pref('ecg-strong')==='1');
+ const [lineWidth,setLineWidth]=useState<LineWidth>(()=>{const v=pref('ecg-line');return LINE_WIDTHS.some(x=>x[0]===v)?v as LineWidth:'normal';});
  const [fitKey,setFitKey]=useState(0);
  const exportRef=useRef<(()=>Promise<Blob>)|null>(null);
  const [notice,setNotice]=useState('');
@@ -454,6 +459,8 @@ export default function App(){
      onNotice={notify}
      onMarked={()=>setTool('move')}
      fitKey={fitKey}
+     strongColors={strong}
+     lineWidth={lineWidth}
      exportRef={exportRef}
     />
    ):(
@@ -585,7 +592,7 @@ export default function App(){
      {activeBar==='measure'&&(
       <>
        {m&&r&&(
-        <section className={'card glass hud'+(context?' has-ctx':'')} aria-label="Medida seleccionada" style={{'--kind':measureColor(m,state.calibration)} as CSSProperties}>
+        <section className={'card glass hud'+(context?' has-ctx':'')} aria-label="Medida seleccionada" style={{'--kind':measureColor(m,state.calibration,strong)} as CSSProperties}>
          <output className="readout" aria-live="polite">
           <span className="r-main">
            <span className="r-kind">{r.qtc!==null?'QTc':m.kind}</span>
@@ -608,7 +615,7 @@ export default function App(){
        )}
        <nav className="segmented kinds glass" aria-label="Tipo de medida">
         {KINDS.map(k=>(
-         <button type="button" key={k} aria-pressed={tool===k} className={'seg txt'+(tool===k?' on':'')} style={{'--kind':KIND_COLOR[k]} as CSSProperties} onClick={()=>chooseTool(k)}><i className="kind-dot" aria-hidden="true"/>{k}</button>
+         <button type="button" key={k} aria-pressed={tool===k} className={'seg txt'+(tool===k?' on':'')} style={{'--kind':kindColor(k,strong)} as CSSProperties} onClick={()=>chooseTool(k)}><i className="kind-dot" aria-hidden="true"/>{k}</button>
         ))}
        </nav>
       </>
@@ -624,6 +631,22 @@ export default function App(){
        <div className="opt-row">
         <span>Fórmula de QTc</span>
         <PillSelect label="Fórmula de QTc" value={formula} options={FORMULAS} onChange={v=>setFormula(v as Formula)}/>
+       </div>
+       <div className="opt-row">
+        <span>Grosor de las líneas</span>
+        <div className="segmented" role="group" aria-label="Grosor de las líneas">
+         {LINE_WIDTHS.map(([id,label])=>(
+          <button type="button" key={id} aria-pressed={lineWidth===id} className={'seg txt'+(lineWidth===id?' on':'')} onClick={()=>{setLineWidth(id);savePref('ecg-line',id);}}>{label}</button>
+         ))}
+        </div>
+       </div>
+       <div className="opt-row">
+        <span>Colores</span>
+        <div className="segmented" role="group" aria-label="Colores">
+         {([[false,'Normales'],[true,'Intensos']] as const).map(([v,label])=>(
+          <button type="button" key={label} aria-pressed={strong===v} className={'seg txt'+(strong===v?' on':'')} onClick={()=>{setStrong(v);savePref('ecg-strong',v?'1':'0');}}>{label}</button>
+         ))}
+        </div>
        </div>
        <button type="button" className="opt-row" onClick={()=>setRotation(r=>(r+90)%360)}><span>Girar el lienzo 90°</span><Icon name="rotate"/></button>
        <button type="button" className="opt-row" onClick={()=>{setFitKey(k=>k+1);setModal(null);}}><span>Ajustar a pantalla</span><Icon name="fit"/></button>
@@ -644,7 +667,7 @@ export default function App(){
          const rr=readout(mm,state.calibration,formula);
          return (
           <li key={mm.id}>
-           <button type="button" className="row" style={{'--kind':KIND_COLOR[mm.kind]} as CSSProperties} onClick={()=>{setSelected(mm.id);setActiveBar('measure');setTool('move');setModal(null);}}>
+           <button type="button" className="row" style={{'--kind':kindColor(mm.kind,strong)} as CSSProperties} onClick={()=>{setSelected(mm.id);setActiveBar('measure');setTool('move');setModal(null);}}>
             <i className="kind-dot" aria-hidden="true"/>
             <span className="row-kind">{mm.kind}</span>
             <span className="row-val">{rr.value!==null?<>{rr.value}<small> ms</small></>:<small>{rr.hint}</small>}</span>

@@ -8,9 +8,15 @@ export type Tool='move'|Kind|'previous'|'current';
 
 /** Un tono por tipo de medida: sobrios, con contraste ≥ 4,5:1 sobre papel blanco (≥ 3,4:1 sobre la grilla rosada). */
 export const KIND_COLOR:Record<Kind,string>={PR:'#1E7F45',QRS:'#B93C0A',QT:'#7B3AB0',RR:'#0A64A8'};
+/** Mismos tonos, mucho más saturados, para trazar sobre papel con grilla marcada. */
+export const KIND_COLOR_STRONG:Record<Kind,string>={PR:'#00A33F',QRS:'#F03C00',QT:'#8A1FE8',RR:'#0066FF'};
+export const QT_STAGE_STRONG=['#E67A00','#A33FF2','#7A0FD6'];
+export const LINE_WIDTHS=[['thin','Fino',.6],['normal','Normal',1],['thick','Grueso',1.8]] as const;
+export type LineWidth=typeof LINE_WIDTHS[number][0];
+export const kindColor=(k:Kind,strong:boolean)=>(strong?KIND_COLOR_STRONG:KIND_COLOR)[k];
 /** El QT se tiñe según cuánto falta para su QTc: sin R (ámbar), una R (violeta medio), las dos R (violeta pleno). */
 export const QT_STAGE_COLOR=['#A65F00','#9059C9','#6B2FA0'];
-export const measureColor=(m:Measure,c:State['calibration']):string=>m.kind==='QT'?QT_STAGE_COLOR[qtStage(m,c)]:KIND_COLOR[m.kind];
+export const measureColor=(m:Measure,c:State['calibration'],strong=false):string=>m.kind==='QT'?(strong?QT_STAGE_STRONG:QT_STAGE_COLOR)[qtStage(m,c)]:kindColor(m.kind,strong);
 
 type Camera={zoom:number;pan:Point};
 type Props={
@@ -33,6 +39,8 @@ type Props={
  onNotice:(s:string)=>void;
  onMarked?:()=>void;
  fitKey?:number;
+ strongColors?:boolean;
+ lineWidth?:LineWidth;
  exportRef?:MutableRefObject<(()=>Promise<Blob>)|null>;
 };
 type Gesture={
@@ -275,6 +283,7 @@ export default function Stage(props:Props){
     if(m.tangent){m.tangent.a.x+=dx;m.tangent.b.x+=dx;m.tangent.a.y+=dy;m.tangent.b.y+=dy;}
     break;
    case 'base':if(m.tangent&&b.tangent)m.tangent.base=b.tangent.base+dy;break;
+   case 'tmid':if(m.tangent&&b.tangent){m.tangent.a.x=b.tangent.a.x+dx;m.tangent.b.x=b.tangent.b.x+dx;}break;
    case 'previous':if(b.rrPrevious!==undefined)m.rrPrevious=b.rrPrevious+dx;break;
    case 'current':if(b.rrCurrent!==undefined)m.rrCurrent=b.rrCurrent+dx;break;
   }
@@ -440,10 +449,11 @@ export default function Stage(props:Props){
  };
 
  function renderMeasure(m:Measure,isDraft:boolean){
-  const chosen=m.id===selected&&!calibrating&&!isDraft,c=measureColor(m,state.calibration),end=intersection(m),xb=end??m.x2,xa=m.x1;
+  const lw=LINE_WIDTHS.find(x=>x[0]===props.lineWidth)?.[2]??1,MM=MAIN*lw,HM=HAIR*lw;
+  const chosen=m.id===selected&&!calibrating&&!isDraft,c=measureColor(m,state.calibration,props.strongColors),end=intersection(m),xb=end??m.x2,xa=m.x1;
   const H=JAW*unit,left=Math.min(xa,xb),right=Math.max(xa,xb),gap=(right-left)*scale;
   const rr=m.kind==='RR',topY=m.top!==undefined?m.top:m.y-H,botY=m.bottom!==undefined?m.bottom:m.y+H;
-  const X1=sx(xa,MAIN),X2=sx(xb,MAIN),Y=sy(m.y,MAIN),T=sy(topY,MAIN),B=sy(botY,MAIN),ext=6*unit;
+  const X1=sx(xa,MM),X2=sx(xb,MM),Y=sy(m.y,MM),T=sy(topY,MM),B=sy(botY,MM),ext=6*unit;
   const r=readout(m,state.calibration,formula);
   // En el lienzo solo el valor principal: QTc, lpm y mm quedan en el panel para no tapar el trazado.
   // En QT la píldora muestra el QTc en cuanto se puede calcular.
@@ -462,33 +472,33 @@ export default function Stage(props:Props){
   const rBot=m.y+H*1.45,rKnob=m.y+H*1.2,rLabel=(x:number,t:string)=>(
    <text x={x} y={rBot+12*unit} textAnchor="middle" fontSize={10.5*unit} fontWeight={500} fontFamily={FONT} fill={c} stroke={HALO} strokeWidth={3*unit} paintOrder="stroke" pointerEvents="none" style={{userSelect:'none'}}>{t}</text>
   );
-  const parts:ReactNode[]=[];
+  const baseEnd=Math.min(doc.width,right+H*3),parts:ReactNode[]=[];
 
   if(rr&&m.projection){
    const p=positions(xa,xb-xa,doc.width).filter(x=>Math.abs(x-xa)>unit&&Math.abs(x-xb)>unit);
-   if(p.length)parts.push(<path key="proj" d={p.map(x=>`M${sx(x,HAIR)} ${T}V${B}`).join('')} stroke={c} strokeWidth={HAIR*unit} strokeDasharray={`${3*unit} ${3*unit}`} opacity=".75" fill="none" pointerEvents="none"/>);
+   if(p.length)parts.push(<path key="proj" d={p.map(x=>`M${sx(x,HM)} ${T}V${B}`).join('')} stroke={c} strokeWidth={HM*unit} strokeDasharray={`${3*unit} ${3*unit}`} opacity=".75" fill="none" pointerEvents="none"/>);
   }
-  parts.push(<path key="main" d={d} stroke={c} strokeWidth={MAIN*unit} strokeLinecap="square" fill="none" pointerEvents="none"/>);
+  parts.push(<path key="main" d={d} stroke={c} strokeWidth={MM*unit} strokeLinecap="square" fill="none" pointerEvents="none"/>);
 
   if(m.kind==='QT'){
    const refs:[number|undefined,string,string][]=[[m.rrPrevious,'previous','R▸'],[m.rrCurrent,'current','◂R']];
    for(const [x,name,label] of refs){
     if(x===undefined)continue;
-    const X=sx(x,HAIR);
-    parts.push(<g key={name} pointerEvents="none"><path d={`M${X} ${m.y-H}V${rBot}`} stroke={c} strokeWidth={HAIR*unit} strokeDasharray={name==='previous'?`${3*unit} ${2*unit}`:undefined}/>{rLabel(x,label)}</g>);
+    const X=sx(x,HM);
+    parts.push(<g key={name} pointerEvents="none"><path d={`M${X} ${m.y-H}V${rBot}`} stroke={c} strokeWidth={HM*unit} strokeDasharray={name==='previous'?`${3*unit} ${2*unit}`:undefined}/>{rLabel(x,label)}</g>);
    }
    if(m.rrPrevious!==undefined&&m.rrCurrent!==undefined){
-    const yy=sy(rKnob,HAIR);
-    parts.push(<path key="rrlink" d={`M${sx(m.rrPrevious,HAIR)} ${yy}H${sx(m.rrCurrent,HAIR)}`} stroke={c} strokeWidth={HAIR*unit} opacity=".7" pointerEvents="none"/>);
+    const yy=sy(rKnob,HM);
+    parts.push(<path key="rrlink" d={`M${sx(m.rrPrevious,HM)} ${yy}H${sx(m.rrCurrent,HM)}`} stroke={c} strokeWidth={HM*unit} opacity=".7" pointerEvents="none"/>);
    }
   }
 
   if(m.tangent){
-   const t=m.tangent,Bs=sy(t.base,HAIR);
-   parts.push(<path key="base" d={`M${Math.max(0,left-H)} ${Bs}H${Math.min(doc.width,right+H*2)}`} stroke={INK} strokeWidth={HAIR*unit} opacity=".85" pointerEvents="none"/>);
-   if(end!==null)parts.push(<path key="ext" d={`M${t.b.x} ${t.b.y}L${end} ${t.base}`} stroke={c} strokeWidth={HAIR*unit} strokeDasharray={`${3*unit} ${2*unit}`} pointerEvents="none"/>);
-    parts.push(<path key="tan" d={`M${t.a.x} ${t.a.y}L${t.b.x} ${t.b.y}`} stroke={c} strokeWidth={MAIN*unit} pointerEvents="none"/>);
-   if(end!==null)parts.push(<circle key="cross" cx={end} cy={t.base} r={3*unit} fill="#fff" stroke={c} strokeWidth={MAIN*unit} pointerEvents="none"/>);
+   const t=m.tangent,Bs=sy(t.base,HM);
+   parts.push(<path key="base" d={`M${Math.max(0,left-H)} ${Bs}H${baseEnd}`} stroke={INK} strokeWidth={HM*unit} opacity=".85" pointerEvents="none"/>);
+   if(end!==null)parts.push(<path key="ext" d={`M${t.b.x} ${t.b.y}L${end} ${t.base}`} stroke={c} strokeWidth={HM*unit} strokeDasharray={`${3*unit} ${2*unit}`} pointerEvents="none"/>);
+    parts.push(<path key="tan" d={`M${t.a.x} ${t.a.y}L${t.b.x} ${t.b.y}`} stroke={c} strokeWidth={MM*unit} pointerEvents="none"/>);
+   if(end!==null)parts.push(<circle key="cross" cx={end} cy={t.base} r={3*unit} fill="#fff" stroke={c} strokeWidth={MM*unit} pointerEvents="none"/>);
   }
 
 
@@ -517,11 +527,10 @@ export default function Stage(props:Props){
     if(m.rrCurrent!==undefined){parts.push(knob(m,m.rrCurrent,rKnob,'current',c),hitCircle(m,m.rrCurrent,rKnob,'current','ew-resize'));}
    }
    if(m.tangent){
-    const t=m.tangent,bx=Math.min(doc.width,right+H);
+    const t=m.tangent,bx=baseEnd,mx2=(t.a.x+t.b.x)/2,my2=(t.a.y+t.b.y)/2;
     parts.push(<path key="hline" data-handle="line" data-measure={m.id} d={`M${t.a.x} ${t.a.y}L${t.b.x} ${t.b.y}`} stroke="transparent" strokeWidth={28*unit} style={{cursor:'grab'}}/>);
-    parts.push(<path key="hbase" data-handle="base" data-measure={m.id} d={`M${left} ${t.base}H${bx}`} stroke="transparent" strokeWidth={24*unit} style={{cursor:'ns-resize'}}/>);
-    parts.push(knob(m,t.a.x,t.a.y,'a',c),knob(m,t.b.x,t.b.y,'b',c),knob(m,bx,t.base,'base',INK));
-    parts.push(hitCircle(m,t.a.x,t.a.y,'a','move'),hitCircle(m,t.b.x,t.b.y,'b','move'),hitCircle(m,bx,t.base,'base','ns-resize'));
+    parts.push(knob(m,t.a.x,t.a.y,'a',c),knob(m,t.b.x,t.b.y,'b',c),knob(m,bx,t.base,'base',INK),knob(m,mx2,my2,'tmid',c));
+    parts.push(hitCircle(m,t.a.x,t.a.y,'a','move'),hitCircle(m,t.b.x,t.b.y,'b','move'),hitCircle(m,bx,t.base,'base','ns-resize'),hitCircle(m,mx2,my2,'tmid','ew-resize'));
    }
   }
 
