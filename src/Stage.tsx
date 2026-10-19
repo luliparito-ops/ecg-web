@@ -528,6 +528,52 @@ export default function Stage(props:Props){
   return <g key={m.id} data-measure={isDraft?undefined:m.id} opacity={calibrating?.3:dim?.3:1} pointerEvents={dim||calibrating?'none':undefined} style={{transition:'opacity .2s'}}>{parts}</g>;
  }
 
+ /** Zoom del lienzo alrededor de un punto de pantalla (o de la mordaza agarrada, si hay una medida en foco). */
+ function zoomAt(cursor:Point,r:number){
+  const p=anchorFor(cursor)??cursor;
+  if(calibrating&&calMode==='grid'){
+   const point=local(p);
+   props.onChange({...state,calibration:scaled(state.calibration,r,point,point,axis)});
+   return;
+  }
+  const rect=svg.current!.getBoundingClientRect(),cx=rect.left+size.w/2,cy=rect.top+size.h/2;
+  setCamera(c=>{
+   const z=clamp(c.zoom*r,.3,100),k=z/c.zoom;
+   return {zoom:z,pan:{x:p.x-cx-(p.x-cx-c.pan.x)*k,y:p.y-cy-(p.y-cy-c.pan.y)*k}};
+  });
+ }
+ /** Dos dedos en el trackpad (o la rueda) desplazan el lienzo; solo el pellizco (Ctrl+rueda / gestos de Safari) hace zoom. */
+ function panBy(dx:number,dy:number,at:Point){
+  if(calibrating&&calMode==='grid'){
+   const a=local(at),b=local({x:at.x-dx,y:at.y-dy});
+   props.onChange({...state,calibration:{...state.calibration,x:state.calibration.x+(b.x-a.x),y:state.calibration.y+(b.y-a.y)}});
+   return;
+  }
+  setCamera(c=>({...c,pan:{x:c.pan.x-dx,y:c.pan.y-dy}}));
+ }
+ const input=useRef({zoomAt,panBy});input.current={zoomAt,panBy};
+ useEffect(()=>{
+  const el=svg.current;if(!el)return;
+  const onWheel=(e:WheelEvent)=>{
+   e.preventDefault();
+   if(pointers.current.size)return;
+   const k=e.deltaMode===1?16:e.deltaMode===2?size.h:1,at={x:e.clientX,y:e.clientY};
+   if(e.ctrlKey||e.metaKey)input.current.zoomAt(at,Math.exp(clamp(-e.deltaY*k*.01,-1,1)));
+   else input.current.panBy(e.deltaX*k,e.deltaY*k,at);
+  };
+  let last=1;
+  const gStart=(e:Event)=>{e.preventDefault();last=1;};
+  const gChange=(e:Event)=>{
+   e.preventDefault();
+   const g=e as Event&{scale:number;clientX:number;clientY:number};
+   if(!g.scale||!last)return;
+   input.current.zoomAt({x:g.clientX,y:g.clientY},g.scale/last);last=g.scale;
+  };
+  el.addEventListener('wheel',onWheel,{passive:false});
+  el.addEventListener('gesturestart',gStart);el.addEventListener('gesturechange',gChange);
+  return()=>{el.removeEventListener('wheel',onWheel);el.removeEventListener('gesturestart',gStart);el.removeEventListener('gesturechange',gChange);};
+ },[size.h]);
+
  /** Documento con las medidas dibujadas, a resolución del original (hasta 4096 px). */
  async function exportImage():Promise<Blob>{
   const S=Math.min(doc.kind==='pdf'?3:1,4096/Math.max(doc.width,doc.height)),W=Math.round(doc.width*S),H=Math.round(doc.height*S);
@@ -579,19 +625,6 @@ export default function Stage(props:Props){
     onPointerUp={up}
     onPointerCancel={cancelPointer}
     onLostPointerCapture={e=>{if(pointers.current.has(e.pointerId))cancelPointer();}}
-    onWheel={e=>{
-     e.preventDefault();
-     if(pointers.current.size)return;
-     const cursor={x:e.clientX,y:e.clientY},p=anchorFor(cursor)??cursor,r=Math.exp(clamp(-e.deltaY*.002,-2,2));
-     if(calibrating&&calMode==='grid'){
-      const point=local(p);
-      props.onChange({...state,calibration:scaled(state.calibration,r,point,point,axis)});
-     }else{
-      const z=clamp(camera.zoom*r,.3,100),ratio=z/camera.zoom;
-      const rect=svg.current!.getBoundingClientRect(),cx=rect.left+size.w/2,cy=rect.top+size.h/2;
-      setCamera({zoom:z,pan:{x:p.x-cx-(p.x-cx-camera.pan.x)*ratio,y:p.y-cy-(p.y-cy-camera.pan.y)*ratio}});
-     }
-    }}
    >
     <g ref={group} transform={`translate(${size.w/2+camera.pan.x} ${size.h/2+camera.pan.y}) scale(${scale}) rotate(${rotation}) translate(${-doc.width/2} ${-doc.height/2})`}>
      <g id={contentID}>
