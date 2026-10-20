@@ -515,3 +515,5 @@ input[type="range"] { accent-color: var(--tint); margin: 0; height: 28px; cursor
 button.opt-row:active { background: var(--fill-2); }
 .opt-row svg.sf { width: 20px; height: 20px; color: var(--label-2); }
 .opt-row .segmented { background: var(--fill-2); flex: none; }
+.opt-row .seg { color: var(--label-2); }
+.opt-row .seg.on { background: var(--tint); color: var(--tint-ink); font-weight: 600; box-shadow: none; }
