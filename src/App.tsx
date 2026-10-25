@@ -4,7 +4,8 @@ import Icon from './Icons';
 import {loadDocument,download,pageText,type DocumentData} from './documents';
 import {copy,scaled,validCalibration,initialCalibration,readout,translate,measuresCSV,summary,parseGain,gainOf,FORMULAS,orderQuad,quadProblem,axisAligned,quadCalibration,SQUARE_MM,type Point,type State,type Axis,type Kind,type Formula,type Measure} from './model';
 import {rectify} from './rectify';
-import {detectDocument} from './autogrid';
+import {detectDocument,documentSampler} from './autogrid';
+import {snapQuad,grow} from './snap';
 import {pageScale,gridDeviation,PT_PER_MM} from './pdfvector';
 
 type ActiveBar='main'|'measure'|'cal';
@@ -144,15 +145,30 @@ export default function App(){
   notify('Calibración anterior restaurada.');
  }
 
-/** Calibra con un cuadrado de 25 mm: escala directa si ya está recto; si no, endereza la imagen. */
- async function calibrateQuad(d:DocumentData,q:Point[],speed:number,keep:Measure[]):Promise<{state:State;doc?:DocumentData}>{
-  if(axisAligned(q)){
-   const c=quadCalibration(q,SQUARE_MM,speed);
+/** Calibra con un cuadrado de 25 mm: ajusta sus esquinas a las líneas gruesas y agranda la referencia sobre la grilla visible
+    (span, en mm); escala directa si queda recta, si no endereza la imagen. */
+ async function calibrateQuad(d:DocumentData,q:Point[],speed:number,keep:Measure[]):Promise<{state:State;doc?:DocumentData;span:string}>{
+  const s=await documentSampler(d).catch(()=>null);
+  const ref=s?grow(s,snapQuad(s,q).quad):{quad:orderQuad(q),w:SQUARE_MM,h:SQUARE_MM};
+  const span=`${ref.w} × ${ref.h} mm`;
+  if(axisAligned(ref.quad)){
+   const c=quadCalibration(ref.quad,ref.w,speed,ref.h);
    if(!validCalibration(c))throw Error('Escala inválida.');
-   return {state:{calibration:c,measures:keep}};
+   return {state:{calibration:c,measures:keep},span};
   }
-  const r=await rectify(d,q,SQUARE_MM);
-  return {state:{calibration:{sx:r.ppmm,sy:r.ppmm,x:r.origin.x,y:r.origin.y,speed,confirmed:true},measures:[]},doc:r.doc};
+  const r=await rectify(d,ref.quad,ref.w,ref.h);
+  return {state:{calibration:{sx:r.ppmm,sy:r.ppmm,x:r.origin.x,y:r.origin.y,speed,confirmed:true},measures:[]},doc:r.doc,span};
+ }
+
+ /** Al marcar la cuarta esquina o soltar una, se ajusta al cruce de líneas gruesas más cercano (si lo hay, a menos de ~1 mm). */
+ async function settleQuad(q:Point[],index?:number){
+  const d=docRef.current;
+  if(!d||q.length!==4)return;
+  const s=await documentSampler(d).catch(()=>null);
+  if(!s)return;
+  const r=snapQuad(s,q,SQUARE_MM,index);
+  setCalQuad(cur=>cur===q?r.quad:cur);
+  if(index===undefined)notify(r.snapped===4?'Esquinas ajustadas a la grilla · verificá la malla':`${4-r.snapped} esquina${r.snapped===3?'':'s'} sin línea gruesa cerca: ${r.snapped===3?'queda':'quedan'} donde la${r.snapped===3?'':'s'} marcaste`);
  }
 
  /** Busca la grilla y deja las 4 esquinas sugeridas sobre el cuadrado de 25 mm. */
@@ -161,7 +177,8 @@ export default function App(){
   try{
    const det=await detectDocument(d);
    if(!det){notify('No encontré la grilla: marcá las esquinas.');return;}
-   setCalQuad(det.quad);
+   const s=await documentSampler(d).catch(()=>null);
+   setCalQuad(s?snapQuad(s,det.quad).quad:det.quad);
    notify(det.confidence>=.7?'Esquinas detectadas · ajustalas si hace falta':'Detección dudosa · revisá las esquinas');
   }catch{
    notify('No pude analizar la imagen: marcá las esquinas.');
@@ -200,7 +217,7 @@ export default function App(){
     const r=await calibrateQuad(doc,q,speed,stateRef.current.measures);
     r.state.calibration.gain=gain;
     finishCalibration(r.state,r.doc);
-    notify(r.doc?'Imagen enderezada y calibrada.':'Calibrado.');
+    notify(`${r.doc?'Imagen enderezada y calibrada':'Calibrado'} · escala medida en ${r.span}`);
    }catch(e){
     notify(e instanceof Error?e.message:'No se pudo calibrar.');
    }finally{
@@ -316,7 +333,7 @@ export default function App(){
     if(det&&det.confidence>=.7){
      try{
       const r=await calibrateQuad(d,det.quad,25,[]);
-      auto={state:r.state,message:'Calibrado automáticamente · 25 mm/s (supuesta) · verificá la grilla'};
+      auto={state:r.state,message:`Calibrado automáticamente · 25 mm/s (supuesta) · escala medida en ${r.span} · verificá la grilla`};
       if(r.doc)setDoc(r.doc);
       setGridVisible(true);
      }catch{auto=null;}
@@ -447,6 +464,7 @@ export default function App(){
      calMode={calMode}
      quad={calQuad}
      onQuad={setCalQuad}
+     onQuadDone={(q,i)=>void settleQuad(q,i)}
      axis={axis}
      selected={selected}
      formula={formula}

@@ -22,27 +22,27 @@ async function raster(doc:DocumentData):Promise<{canvas:HTMLCanvasElement;s:numb
 
 export type Rectified={doc:DocumentData;ppmm:number;origin:Point};
 
-/** Endereza el documento para que el cuadrado marcado (quad, en unidades del documento) quede recto y de lado `mm`. */
-export async function rectify(doc:DocumentData,quad:Point[],mm:number):Promise<Rectified>{
+/** Endereza el documento para que el rectángulo marcado (quad, en unidades del documento) quede recto y de w × h mm. */
+export async function rectify(doc:DocumentData,quad:Point[],w:number,h0=w):Promise<Rectified>{
  const {canvas,s}=await raster(doc);
  const q=quad.map(p=>({x:p.x*s,y:p.y*s}));
- const h=paperToImage(q,mm),inv=h&&invertH(h);
+ const h=paperToImage(q,w,h0),inv=h&&invertH(h);
  if(!h||!inv)throw Error('Las esquinas no permiten enderezar la imagen.');
 
  const edge=(a:Point,b:Point)=>Math.hypot(b.x-a.x,b.y-a.y);
- let k=(edge(q[0],q[1])+edge(q[1],q[2])+edge(q[2],q[3])+edge(q[3],q[0]))/4/mm;
+ let k=((edge(q[0],q[1])+edge(q[3],q[2]))/w+(edge(q[1],q[2])+edge(q[0],q[3]))/h0)/4;
 
  // Extensión del papel visible: las cuatro esquinas de la imagen llevadas al plano en mm.
  const W=canvas.width,H=canvas.height;
  const corners=[{x:0,y:0},{x:W,y:0},{x:W,y:H},{x:0,y:H}].map(p=>applyH(inv,p));
  const denom=[{x:0,y:0},{x:W,y:0},{x:W,y:H},{x:0,y:H}].map(p=>inv[6]*p.x+inv[7]*p.y+inv[8]);
- let minX=-60,minY=-60,maxX=mm+60,maxY=mm+60;
+ let minX=-60,minY=-60,maxX=w+60,maxY=h0+60;
  if(corners.every(Boolean)&&(denom.every(d=>d>0)||denom.every(d=>d<0))){
   const xs=corners.map(c=>c!.x),ys=corners.map(c=>c!.y);
   minX=Math.min(...xs);maxX=Math.max(...xs);minY=Math.min(...ys);maxY=Math.max(...ys);
  }
  // La perspectiva estira el lado lejano: se limita la ventana a la extensión de la foto original alrededor del cuadrado.
- const cx=mm/2,cy=mm/2,hw=.9*W/k,hh=.9*H/k;
+ const cx=w/2,cy=h0/2,hw=.9*W/k,hh=.9*H/k;
  minX=Math.max(minX,cx-hw);maxX=Math.min(maxX,cx+hw);minY=Math.max(minY,cy-hh);maxY=Math.min(maxY,cy+hh);
  const wmm=maxX-minX,hmm=maxY-minY;
  if(!(wmm>0&&hmm>0))throw Error('La perspectiva es demasiado extrema para enderezar.');

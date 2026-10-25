@@ -177,11 +177,12 @@ export function axisAligned(q:Point[],tol=.004):boolean{
  const upright=(a:Point,b:Point)=>b.y-a.y>0&&Math.abs(b.x-a.x)<=tol*(b.y-a.y);
  return flat(p1,p2)&&flat(p4,p3)&&upright(p1,p4)&&upright(p2,p3)&&Math.abs(top-bottom)<=tol*top&&Math.abs(left-right)<=tol*left;
 }
-export function quadCalibration(q:Point[],mm:number,speed:number):Calibration{
+/** Escala por eje de un rectángulo recto de w × h mm (un cuadrado si no se indica h). */
+export function quadCalibration(q:Point[],w:number,speed:number,h=w):Calibration{
  const [p1,p2,p3,p4]=q;
- return {sx:(side(p1,p2)+side(p4,p3))/2/mm,sy:(side(p1,p4)+side(p2,p3))/2/mm,x:p1.x,y:p1.y,speed,confirmed:true};
+ return {sx:(side(p1,p2)+side(p4,p3))/2/w,sy:(side(p1,p4)+side(p2,p3))/2/h,x:p1.x,y:p1.y,speed,confirmed:true};
 }
-/** Homografía del plano del papel (mm, origen en la esquina 1) a la imagen. */
-export function paperToImage(q:Point[],mm:number):Mat|null{
- return homography([{x:0,y:0},{x:mm,y:0},{x:mm,y:mm},{x:0,y:mm}],q);
+/** Homografía del plano del papel (mm, origen en la esquina 1) a la imagen, para un rectángulo de w × h mm. */
+export function paperToImage(q:Point[],w:number,h=w):Mat|null{
+ return homography([{x:0,y:0},{x:w,y:0},{x:w,y:h},{x:0,y:h}],q);
 }

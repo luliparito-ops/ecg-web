@@ -27,6 +27,8 @@ type Props={
  calMode:'grid'|'quad';
  quad:Point[];
  onQuad:(q:Point[])=>void;
+ /** Al marcar la cuarta esquina (index ausente) o soltar una (su índice): ajuste fino a la grilla. */
+ onQuadDone?:(q:Point[],index?:number)=>void;
  axis:Axis;
  selected:string|null;
  formula:Formula;
@@ -349,7 +351,11 @@ export default function Stage(props:Props){
   stopLens();
   setActive(null);
   if(g&&g.type==='qtap'&&!g.moved&&quad.length<4){
-   props.onQuad([...quad,local(screen(e))]);
+   const next=[...quad,local(screen(e))];
+   props.onQuad(next);
+   if(next.length===4)props.onQuadDone?.(next);
+  }else if(g&&g.type==='qpoint'&&g.index!==undefined&&quad.length===4){
+   props.onQuadDone?.(quad,g.index);
   }else if(g&&g.type==='create'&&g.draft){
    const m=g.draft;
    if(Math.abs(m.x2-m.x1)*scale>=4){
