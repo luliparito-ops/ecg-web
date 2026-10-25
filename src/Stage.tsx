@@ -2,7 +2,7 @@ import {useEffect,useId,useRef,useState,type MutableRefObject,type PointerEvent 
 import {flushSync} from 'react-dom';
 import type {DocumentData} from './documents';
 import PDFLayer from './PDFLayer';
-import {clamp,copy,scaled,positions,intersection,readout,qtStage,translate,setEdge,paperToImage,applyH,orderQuad,SQUARE_MM,type Axis,type Formula,type Kind,type Measure,type Point,type State} from './model';
+import {clamp,copy,positions,intersection,readout,qtStage,translate,setEdge,orderQuad,validCalibration,type Formula,type Kind,type Measure,type Point,type State} from './model';
 
 export type Tool='move'|Kind|'previous'|'current';
 
@@ -24,12 +24,11 @@ type Props={
  state:State;
  tool:Tool;
  calibrating:boolean;
- calMode:'grid'|'quad';
+ /** Cuadrado de calibración (25 mm): esquinas arriba-izq., arriba-der., abajo-der., abajo-izq. Vacío: se coloca en el centro de la vista. */
  quad:Point[];
  onQuad:(q:Point[])=>void;
- /** Al marcar la cuarta esquina (index ausente) o soltar una (su índice): ajuste fino a la grilla. */
+ /** Al soltar el cuadrado (index ausente) o una esquina (su índice): ajuste fino a la grilla. */
  onQuadDone?:(q:Point[],index?:number)=>void;
- axis:Axis;
  selected:string|null;
  formula:Formula;
  gridVisible:boolean;
@@ -46,8 +45,9 @@ type Props={
  exportRef?:MutableRefObject<(()=>Promise<Blob>)|null>;
 };
 type Gesture={
- type:'nav'|'grid'|'create'|'edit'|'mark'|'qtap'|'qpoint';
+ type:'nav'|'create'|'edit'|'mark'|'qmove'|'qpoint';
  index?:number;
+ quad?:Point[];
  moved?:boolean;
  ids:number[];
  mid:Point;
@@ -88,8 +88,10 @@ function textWidth(text:string,weight=500,size=PILL_FONT){
 }
 
 export default function Stage(props:Props){
- const {doc,state,tool,calibrating,calMode,quad,axis,formula,gridVisible,opacity,rotation}=props;
- const quadMode=calibrating&&calMode==='quad';
+ const {doc,state,tool,calibrating,quad,formula,gridVisible,opacity,rotation}=props;
+ const quadMode=calibrating;
+ // En PDF el cuadrado se mantiene recto (escala por eje, sin rasterizar); en imágenes sus esquinas siguen la perspectiva.
+ const rectOnly=doc.kind==='pdf';
  const [forced,setForced]=useState<number|null>(null);
  // Al exportar se dibuja sin selección ni bloqueos.
  const selected=forced===null?props.selected:null;
@@ -152,6 +154,16 @@ export default function Stage(props:Props){
   return m?new DOMPoint(p.x,p.y).matrixTransform(m.inverse()):p;
  };
  const screen=(e:{clientX:number;clientY:number}):Point=>({x:e.clientX,y:e.clientY});
+
+ // Sin cuadrado al calibrar: aparece en el centro de la vista, con 25 mm de la calibración vigente (o el 40 % de la vista).
+ useEffect(()=>{
+  if(!quadMode||quad.length)return;
+  const r=svg.current?.getBoundingClientRect();
+  if(!r)return;
+  const c=local({x:r.left+r.width/2,y:r.top+r.height/2}),cal=state.calibration,known=cal.confirmed&&validCalibration(cal);
+  const hw=known?12.5*cal.sx:.2*Math.min(r.width,r.height)/Math.max(scale,1e-5),hh=known?12.5*cal.sy:hw;
+  props.onQuad([{x:c.x-hw,y:c.y-hh},{x:c.x+hw,y:c.y-hh},{x:c.x+hw,y:c.y+hh},{x:c.x-hw,y:c.y+hh}]);
+ },[quadMode,quad.length]);
  const metrics=(ids:number[])=>{
   const a=ids.map(i=>pointers.current.get(i)).filter((p):p is Point=>!!p);
   return {
@@ -173,8 +185,8 @@ export default function Stage(props:Props){
   return {x:q.x,y:q.y};
  }
  function startNavigation(){
-  const ids=[...pointers.current.keys()].slice(0,2),m=metrics(ids),isGrid=calibrating&&calMode==='grid';
-  gesture.current={type:isGrid?'grid':'nav',ids,...m,camera:copy(camera),before:copy(state),start:local(m.mid),anchor:isGrid?undefined:anchorFor(m.mid)??undefined};
+  const ids=[...pointers.current.keys()].slice(0,2),m=metrics(ids);
+  gesture.current={type:'nav',ids,...m,camera:copy(camera),before:copy(state),start:local(m.mid),anchor:anchorFor(m.mid)??undefined};
  }
  function stopLens(){if(timer.current)clearTimeout(timer.current);longActive.current=false;setLens(null);}
 
@@ -207,14 +219,14 @@ export default function Stage(props:Props){
 
   if(quadMode){
    const qi=target.closest('[data-qpoint]')?.getAttribute('data-qpoint');
-   if(qi!==null&&qi!==undefined){
-    gesture.current={type:'qpoint',ids:[e.pointerId],mid:p,distance:0,camera:copy(camera),before:copy(state),start:point,index:+qi};
+   if(qi!==null&&qi!==undefined&&quad.length===4){
+    gesture.current={type:'qpoint',ids:[e.pointerId],mid:p,distance:0,camera:copy(camera),before:copy(state),start:point,index:+qi,quad:quad.map(q=>({...q}))};
     longActive.current=true;setLens(point);
+   }else if(target.closest('[data-qbody]')&&quad.length===4){
+    gesture.current={type:'qmove',ids:[e.pointerId],mid:p,distance:0,camera:copy(camera),before:copy(state),start:point,quad:quad.map(q=>({...q})),moved:false};
    }else{
-    gesture.current={type:'qtap',ids:[e.pointerId],mid:p,distance:0,camera:copy(camera),before:copy(state),start:point,moved:false};
+    startNavigation();
    }
-  }else if(calibrating){
-   startNavigation();
   }else if((tool==='previous'||tool==='current')&&selected){
    // Marcar una R tiene prioridad: la R actual cae dentro del propio calibre.
    gesture.current={type:'mark',ids:[e.pointerId],mid:p,distance:0,camera:copy(camera),before:copy(state),start:point,id:selected,target:tool};
@@ -250,7 +262,7 @@ export default function Stage(props:Props){
   }
 
   const g=gesture.current;
-  if(g&&(g.type==='edit'||g.type==='mark'||g.type==='grid')){
+  if(g&&(g.type==='edit'||g.type==='mark')){
    timer.current=setTimeout(()=>{longActive.current=true;setLens(point);},450);
   }
  }
@@ -306,15 +318,21 @@ export default function Stage(props:Props){
   if(!longActive.current&&Math.hypot(p.x-g.mid.x,p.y-g.mid.y)>8&&timer.current)clearTimeout(timer.current);
   if(longActive.current)setLens(point);
 
-  if(g.type==='qtap'&&!g.moved&&Math.hypot(p.x-g.mid.x,p.y-g.mid.y)>8)g.moved=true;
+  if(g.type==='qmove'&&!g.moved&&Math.hypot(p.x-g.mid.x,p.y-g.mid.y)>3)g.moved=true;
 
-  if(g.type==='qpoint'&&g.index!==undefined){
-   props.onQuad(quad.map((q,i)=>i===g.index?point:q));
-  }else if(g.type==='grid'){
-   const ratio=m.distance&&g.distance>3?m.distance/g.distance:1;
-   const c=scaled(g.before.calibration,ratio,g.start,local(m.mid),axis);
-   props.onChange({...state,calibration:c});
-  }else if(g.type==='nav'||(g.type==='qtap'&&g.moved)){
+  if(g.type==='qpoint'&&g.index!==undefined&&g.quad){
+   // Edición relativa: la esquina conserva su distancia al dedo.
+   const i=g.index,b=g.quad,c={x:b[i].x+point.x-g.start.x,y:b[i].y+point.y-g.start.y};
+   props.onQuad(b.map((q,j)=>{
+    if(j===i)return c;
+    if(!rectOnly||j===(i+2)%4)return q;
+    // Rectángulo recto: la esquina vecina que comparte la altura sigue en y; la otra, en x.
+    return Math.abs(q.y-b[i].y)<Math.abs(q.x-b[i].x)?{x:q.x,y:c.y}:{x:c.x,y:q.y};
+   }));
+  }else if(g.type==='qmove'&&g.quad){
+   const dx=point.x-g.start.x,dy=point.y-g.start.y;
+   props.onQuad(g.quad.map(q=>({x:q.x+dx,y:q.y+dy})));
+  }else if(g.type==='nav'){
    const ratio=m.distance&&g.distance>3?m.distance/g.distance:1;
    const z=clamp(g.camera.zoom*ratio,.3,100),r=z/g.camera.zoom;
    const rect=svg.current!.getBoundingClientRect();
@@ -350,10 +368,8 @@ export default function Stage(props:Props){
   const g=gesture.current;
   stopLens();
   setActive(null);
-  if(g&&g.type==='qtap'&&!g.moved&&quad.length<4){
-   const next=[...quad,local(screen(e))];
-   props.onQuad(next);
-   if(next.length===4)props.onQuadDone?.(next);
+  if(g&&g.type==='qmove'&&g.moved&&quad.length===4){
+   props.onQuadDone?.(quad);
   }else if(g&&g.type==='qpoint'&&g.index!==undefined&&quad.length===4){
    props.onQuadDone?.(quad,g.index);
   }else if(g&&g.type==='create'&&g.draft){
@@ -549,11 +565,6 @@ export default function Stage(props:Props){
  /** Zoom del lienzo alrededor de un punto de pantalla (o de la mordaza agarrada, si hay una medida en foco). */
  function zoomAt(cursor:Point,r:number){
   const p=anchorFor(cursor)??cursor;
-  if(calibrating&&calMode==='grid'){
-   const point=local(p);
-   props.onChange({...state,calibration:scaled(state.calibration,r,point,point,axis)});
-   return;
-  }
   const rect=svg.current!.getBoundingClientRect(),cx=rect.left+size.w/2,cy=rect.top+size.h/2;
   setCamera(c=>{
    const z=clamp(c.zoom*r,.3,100),k=z/c.zoom;
@@ -562,11 +573,6 @@ export default function Stage(props:Props){
  }
  /** Dos dedos en el trackpad (o la rueda) desplazan el lienzo; solo el pellizco (Ctrl+rueda / gestos de Safari) hace zoom. */
  function panBy(dx:number,dy:number,at:Point){
-  if(calibrating&&calMode==='grid'){
-   const a=local(at),b=local({x:at.x-dx,y:at.y-dy});
-   props.onChange({...state,calibration:{...state.calibration,x:state.calibration.x+(b.x-a.x),y:state.calibration.y+(b.y-a.y)}});
-   return;
-  }
   setCamera(c=>({...c,pan:{x:c.pan.x-dx,y:c.pan.y-dy}}));
  }
  const input=useRef({zoomAt,panBy});input.current={zoomAt,panBy};
@@ -614,7 +620,7 @@ export default function Stage(props:Props){
  }
  if(props.exportRef)props.exportRef.current=exportImage;
 
- const showGrid=(calibrating&&calMode==='grid')||gridVisible;
+ const showGrid=gridVisible&&!calibrating;
  const ordered=quad.length===4?orderQuad(quad):quad;
 
  /** Grilla de calibración como líneas explícitas (los patrones SVG recortan la mitad del trazo en el borde de cada celda). */
@@ -653,20 +659,20 @@ export default function Stage(props:Props){
       {state.measures.map(m=>renderMeasure(m,false))}
       {draft&&renderMeasure(draft,true)}
 
-      {quadMode&&(()=>{
-       const H=ordered.length===4?paperToImage(ordered,SQUARE_MM):null;
-       const line=(a:Point,b:Point)=>{const p=applyH(H!,a),q=applyH(H!,b);return p&&q?`M${p.x} ${p.y}L${q.x} ${q.y}`:'';};
-       const cell=Math.hypot(ordered[1]?.x-ordered[0]?.x||0,ordered[1]?.y-ordered[0]?.y||0)*scale/SQUARE_MM;
-       const mm=Array.from({length:SQUARE_MM+1},(_,i)=>i);
-       const edge=quad.length>1?`M${ordered.map(p=>`${p.x} ${p.y}`).join('L')}${quad.length===4?'Z':''}`:'';
+      {quadMode&&ordered.length===4&&(()=>{
+       const edge=`M${ordered.map(p=>`${p.x} ${p.y}`).join('L')}Z`;
+       const top={x:(ordered[0].x+ordered[1].x)/2,y:(ordered[0].y+ordered[1].y)/2},lw=44*unit,lh=20*unit;
        return (
         <g>
-         {H&&cell>=5&&<path d={mm.filter(i=>i%5).map(i=>line({x:i,y:0},{x:i,y:SQUARE_MM})+line({x:0,y:i},{x:SQUARE_MM,y:i})).join('')} stroke={GRID_FINE} strokeWidth={HAIR*unit} opacity=".5" fill="none" pointerEvents="none"/>}
-         {H&&<path d={mm.filter(i=>i%5===0&&i>0&&i<SQUARE_MM).map(i=>line({x:i,y:0},{x:i,y:SQUARE_MM})+line({x:0,y:i},{x:SQUARE_MM,y:i})).join('')} stroke={GRID_FINE} strokeWidth={HAIR*unit} fill="none" pointerEvents="none"/>}
-         {edge&&<path d={edge} stroke="rgba(28,28,30,.45)" strokeWidth={(MAIN+2)*unit} strokeLinejoin="round" fill="none" pointerEvents="none"/>}
-         {edge&&<path d={edge} stroke={QUAD} strokeWidth={MAIN*unit} strokeLinejoin="round" fill="none" pointerEvents="none"/>}
+         <path d={edge} data-qbody="" fill={QUAD} fillOpacity=".1" stroke="none" style={{cursor:'grab'}}/>
+         <path d={edge} stroke="rgba(28,28,30,.45)" strokeWidth={(MAIN+3)*unit} strokeLinejoin="round" fill="none" pointerEvents="none"/>
+         <path d={edge} stroke={QUAD} strokeWidth={(MAIN+1)*unit} strokeLinejoin="round" fill="none" pointerEvents="none"/>
+         <g pointerEvents="none">
+          <rect x={top.x-lw/2} y={top.y-lh-8*unit} width={lw} height={lh} rx={lh/2} fill="rgba(28,28,30,.82)"/>
+          <text x={top.x} y={top.y-lh/2-8*unit} dy=".36em" textAnchor="middle" fontSize={12*unit} fontWeight={700} fill={QUAD} style={{fontVariantNumeric:'tabular-nums',userSelect:'none'}}>25 mm</text>
+         </g>
          {quad.map((p,i)=>{
-          const r=7*unit,g=2.5*unit,L=12*unit,cross=`M${p.x-L} ${p.y}H${p.x-g}M${p.x+g} ${p.y}H${p.x+L}M${p.x} ${p.y-L}V${p.y-g}M${p.x} ${p.y+g}V${p.y+L}`;
+          const r=8*unit,g=2.5*unit,L=12*unit,cross=`M${p.x-L} ${p.y}H${p.x-g}M${p.x+g} ${p.y}H${p.x+L}M${p.x} ${p.y-L}V${p.y-g}M${p.x} ${p.y+g}V${p.y+L}`;
           return (
            <g key={i} data-qpoint={i} style={{cursor:'move'}}>
             <circle cx={p.x} cy={p.y} r={HIT/2*unit} fill="transparent"/>
@@ -675,8 +681,6 @@ export default function Stage(props:Props){
              <path d={cross} stroke="rgba(28,28,30,.45)" strokeWidth={(HAIR+1.5)*unit}/>
              <circle cx={p.x} cy={p.y} r={r} fill="none" stroke={QUAD} strokeWidth={MAIN*unit}/>
              <path d={cross} stroke={QUAD} strokeWidth={MAIN*unit}/>
-             <circle cx={p.x+14*unit} cy={p.y-14*unit} r={7.5*unit} fill="rgba(28,28,30,.82)"/>
-             <text x={p.x+14*unit} y={p.y-14*unit} dy=".36em" textAnchor="middle" fontSize={10*unit} fontWeight={700} fill={QUAD} style={{fontVariantNumeric:'tabular-nums',userSelect:'none'}}>{i+1}</text>
             </g>
            </g>
           );

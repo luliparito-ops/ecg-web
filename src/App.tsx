@@ -2,7 +2,7 @@ import {createContext,useCallback,useContext,useEffect,useRef,useState,type CSSP
 import Stage,{kindColor,measureColor,LINE_WIDTHS,type LineWidth,type Tool} from './Stage';
 import Icon from './Icons';
 import {loadDocument,download,pageText,type DocumentData} from './documents';
-import {copy,scaled,validCalibration,initialCalibration,readout,translate,measuresCSV,summary,parseGain,gainOf,FORMULAS,orderQuad,quadProblem,axisAligned,quadCalibration,SQUARE_MM,type Point,type State,type Axis,type Kind,type Formula,type Measure} from './model';
+import {copy,validCalibration,initialCalibration,readout,translate,measuresCSV,summary,parseGain,gainOf,FORMULAS,orderQuad,quadProblem,axisAligned,quadCalibration,SQUARE_MM,type Point,type State,type Kind,type Formula,type Measure} from './model';
 import {rectify} from './rectify';
 import {detectDocument,documentSampler} from './autogrid';
 import {snapQuad,grow} from './snap';
@@ -48,9 +48,8 @@ export default function App(){
  const [tool,setTool]=useState<Tool>('move');
  const [activeBar,setActiveBar]=useState<ActiveBar>('main');
  const [modal,setModal]=useState<ModalSheet>(null);
- const [axis,setAxis]=useState<Axis>('x');
  const [formula,setFormula]=useState<Formula>('Bazett');
- const [opacity,setOpacity]=useState(.55);
+ const opacity=.55;
  const [gridVisible,setGridVisible]=useState(false);
  const [rotation,setRotation]=useState(0);
  const [focus,setFocus]=useState(false);
@@ -68,8 +67,7 @@ export default function App(){
  const undoStack=useRef<State[]>([]),redoStack=useRef<State[]>([]);
  const [canUndo,setCanUndo]=useState(false);
  const [canRedo,setCanRedo]=useState(false);
- const calSnapshot=useRef<State|null>(null),calDoc=useRef<DocumentData|null>(null);
- const [calMode,setCalMode]=useState<'grid'|'quad'>('grid');
+ const calSnapshot=useRef<State|null>(null),calDoc=useRef<DocumentData|null>(null),quadTouched=useRef(0);
  const [calQuad,setCalQuad]=useState<Point[]>([]);
  const fileInput=useRef<HTMLInputElement>(null);
  const noticeTimer=useRef<ReturnType<typeof setTimeout>>();
@@ -124,17 +122,15 @@ export default function App(){
   calSnapshot.current=copy(stateRef.current);
   calDoc.current=doc;
   setCalQuad([]);
-  const fromPhoto=doc.original||doc.kind==='image';
-  setCalMode(fromPhoto?'quad':'grid');
+  const base=doc.original??doc;
   if(doc.original){setDoc(doc.original);change(newState());}
-  setAxis('x');
   setSpeedText(String(stateRef.current.calibration.speed||25));
   setGainText(String(gainOf(stateRef.current.calibration)));
   setTool('move');
   setActiveBar('cal');
   setModal(null);
-  notify(fromPhoto?'Tocá las 4 esquinas de un cuadrado de 25 mm, desde arriba a la izquierda':'Un dedo mueve la grilla · dos dedos la escalan');
-  if(fromPhoto)void suggestQuad(doc.original??doc);
+  notify('Encajá el cuadrado amarillo en 5 × 5 cuadros grandes (25 mm)');
+  if(base.kind==='image')void suggestQuad(base);
  }
 
  function cancelCalibration(){
@@ -160,37 +156,34 @@ export default function App(){
   return {state:{calibration:{sx:r.ppmm,sy:r.ppmm,x:r.origin.x,y:r.origin.y,speed,confirmed:true},measures:[]},doc:r.doc,span};
  }
 
- /** Al marcar la cuarta esquina o soltar una, se ajusta al cruce de líneas gruesas más cercano (si lo hay, a menos de ~1 mm). */
+ /** Al soltar el cuadrado o una esquina, se ajusta al cruce de líneas gruesas más cercano (si lo hay, a menos de ~1 mm). */
  async function settleQuad(q:Point[],index?:number){
   const d=docRef.current;
+  quadTouched.current++;
   if(!d||q.length!==4)return;
   const s=await documentSampler(d).catch(()=>null);
   if(!s)return;
   const r=snapQuad(s,q,SQUARE_MM,index);
   setCalQuad(cur=>cur===q?r.quad:cur);
-  if(index===undefined)notify(r.snapped===4?'Esquinas ajustadas a la grilla · verificá la malla':`${4-r.snapped} esquina${r.snapped===3?'':'s'} sin línea gruesa cerca: ${r.snapped===3?'queda':'quedan'} donde la${r.snapped===3?'':'s'} marcaste`);
+  if(index===undefined)notify(r.snapped===4?'Ajustado a la grilla':r.snapped?'Ajustado en parte: revisá las esquinas':'Sin líneas gruesas cerca: acercá el cuadrado a 5 × 5 cuadros grandes');
  }
 
- /** Busca la grilla y deja las 4 esquinas sugeridas sobre el cuadrado de 25 mm. */
- async function suggestQuad(d:DocumentData){
+ /** Busca la grilla y coloca el cuadrado sobre 5 × 5 cuadros grandes; si mientras tanto se movió el cuadrado, no lo pisa. */
+ async function suggestQuad(d:DocumentData,force=false){
+  const touched=quadTouched.current;
   setBusy(true);
   try{
    const det=await detectDocument(d);
-   if(!det){notify('No encontré la grilla: marcá las esquinas.');return;}
+   if(!force&&touched!==quadTouched.current)return;
+   if(!det){notify('No encontré la grilla sola: arrastrá el cuadrado hasta 5 × 5 cuadros grandes');return;}
    const s=await documentSampler(d).catch(()=>null);
    setCalQuad(s?snapQuad(s,det.quad).quad:det.quad);
-   notify(det.confidence>=.7?'Esquinas detectadas · ajustalas si hace falta':'Detección dudosa · revisá las esquinas');
+   notify(det.confidence>=.7?'Cuadrado colocado sobre la grilla · revisalo y tocá Listo':'Detección dudosa · revisá que el cuadrado abarque 5 × 5 cuadros grandes');
   }catch{
-   notify('No pude analizar la imagen: marcá las esquinas.');
+   notify('No pude analizar la imagen: arrastrá el cuadrado a mano');
   }finally{
    setBusy(false);
   }
- }
-
- function modeChange(mode:'grid'|'quad'){
-  setCalMode(mode);
-  setCalQuad([]);
-  notify(mode==='quad'?'Tocá las 4 esquinas de un cuadrado de 25 mm, desde arriba a la izquierda':'Un dedo mueve la grilla · dos dedos la escalan');
  }
 
  function finishCalibration(next:State,newDoc?:DocumentData){
@@ -207,34 +200,20 @@ export default function App(){
   const speed=Number(speedText),gain=Number(gainText);
   if(!Number.isFinite(speed)||speed<=0||speed>1000){notify('Indicá una velocidad válida.');return;}
   if(!Number.isFinite(gain)||gain<=0||gain>1000){notify('Indicá una ganancia válida.');return;}
-  if(calMode==='quad'){
-   if(calQuad.length<4){notify('Marcá las 4 esquinas.');return;}
-   const q=orderQuad(calQuad),problem=quadProblem(q);
-   if(problem){notify(problem);return;}
-   if(!doc)return;
-   setBusy(true);
-   try{
-    const r=await calibrateQuad(doc,q,speed,stateRef.current.measures);
-    r.state.calibration.gain=gain;
-    finishCalibration(r.state,r.doc);
-    notify(`${r.doc?'Imagen enderezada y calibrada':'Calibrado'} · escala medida en ${r.span}`);
-   }catch(e){
-    notify(e instanceof Error?e.message:'No se pudo calibrar.');
-   }finally{
-    setBusy(false);
-   }
-   return;
+  if(calQuad.length<4||!doc)return;
+  const q=orderQuad(calQuad),problem=quadProblem(q);
+  if(problem){notify(problem);return;}
+  setBusy(true);
+  try{
+   const r=await calibrateQuad(doc,q,speed,stateRef.current.measures);
+   r.state.calibration.gain=gain;
+   finishCalibration(r.state,r.doc);
+   notify(`${r.doc?'Imagen enderezada y calibrada':'Calibrado'} · escala medida en ${r.span}`);
+  }catch(e){
+   notify(e instanceof Error?e.message:'No se pudo calibrar.');
+  }finally{
+   setBusy(false);
   }
-  const c={...stateRef.current.calibration,speed,gain,confirmed:true};
-  if(!validCalibration(c)){notify('Escala inválida.');return;}
-  finishCalibration({...stateRef.current,calibration:c});
-  notify('Calibrado.');
- }
-
- function nudge(r:number){
-  if(!doc)return;
-  const p={x:doc.width/2,y:doc.height/2};
-  change({...state,calibration:scaled(state.calibration,r,p,p,axis)});
  }
 
  function undo(){
@@ -461,11 +440,9 @@ export default function App(){
      state={state}
      tool={tool}
      calibrating={calibrating}
-     calMode={calMode}
      quad={calQuad}
      onQuad={setCalQuad}
      onQuadDone={(q,i)=>void settleQuad(q,i)}
-     axis={axis}
      selected={selected}
      formula={formula}
      gridVisible={gridVisible}
@@ -569,40 +546,12 @@ export default function App(){
 
      {activeBar==='cal'&&(
       <nav className="card glass cal-card" aria-label="Calibración">
+       <p className="cal-hint">Encajá el cuadrado en <b>5 × 5 cuadros grandes</b> · arrastralo o tirá de una esquina</p>
        <div className="cal-row">
-        <div className="segmented" role="group" aria-label="Método">
-         <button type="button" aria-label="Grilla" title="Grilla" aria-pressed={calMode==='grid'} className={'seg'+(calMode==='grid'?' on':'')} onClick={()=>modeChange('grid')}><Icon name="grid"/></button>
-         <button type="button" aria-label="4 puntos" title="4 puntos" aria-pressed={calMode==='quad'} className={'seg'+(calMode==='quad'?' on':'')} onClick={()=>modeChange('quad')}><Icon name="quad"/></button>
-        </div>
-        {calMode==='grid'?(
-         <div className="segmented" role="group" aria-label="Eje">
-          {([['both','arrowBoth','Ambos ejes'],['x','arrowX','Tiempo'],['y','arrowY','Amplitud']] as const).map(([a,ic,label])=>(
-           <button type="button" key={a} aria-label={label} title={label} aria-pressed={axis===a} className={'seg'+(axis===a?' on':'')} onClick={()=>setAxis(a)}><Icon name={ic}/></button>
-          ))}
-         </div>
-        ):(
-         <div className="quad-count">
-          <Btn icon="auto" label="Detectar grilla" onPress={()=>{if(docRef.current)void suggestQuad(docRef.current);}}/>
-          <span aria-label={`${calQuad.length} de 4 esquinas`}>{calQuad.length}<small>/4</small></span>
-          <Btn icon="trash" label="Borrar puntos" disabled={!calQuad.length} className="danger" onPress={()=>setCalQuad([])}/>
-         </div>
-        )}
-       </div>
-       <div className="cal-row">
+        {doc?.kind==='image'&&<Btn icon="auto" label="Detectar grilla" onPress={()=>{if(docRef.current)void suggestQuad(docRef.current,true);}}/>}
+        <Btn icon="quad" label="Recolocar en el centro" onPress={()=>setCalQuad([])}/>
         <PillSelect label="Velocidad del papel" value={speedText} options={SPEEDS} onChange={setSpeedText} suffix="mm/s"/>
         <PillSelect label="Ganancia" value={gainText} options={GAINS} onChange={setGainText} suffix="mm/mV"/>
-        {calMode==='grid'&&(
-         <>
-          <div className="stepper" role="group" aria-label="Escala">
-           <Btn icon="minus" label="Reducir escala" onPress={()=>nudge(.98)}/>
-           <Btn icon="plus" label="Aumentar escala" onPress={()=>nudge(1.02)}/>
-          </div>
-          <label className="opacity" title="Opacidad de la grilla">
-           <Icon name="opacity"/>
-           <input type="range" min=".1" max=".9" step=".02" value={opacity} aria-label="Opacidad de la grilla" onChange={e=>setOpacity(+e.target.value)}/>
-          </label>
-         </>
-        )}
        </div>
       </nav>
      )}

@@ -329,13 +329,8 @@ input[type="range"] { accent-color: var(--tint); margin: 0; height: 28px; cursor
 /* CALIBRACIÓN */
 .cal-card { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 6px; }
 .cal-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; }
-.quad-count { display: flex; align-items: center; gap: 0; color: var(--label-2); font-size: 15px; font-weight: 500; font-variant-numeric: tabular-nums; }
-.quad-count > span { min-width: 36px; text-align: center; color: var(--label); }
-.quad-count small { color: var(--label-2); font-size: 13px; }
-.quad-count .sf-btn { width: 40px; height: 36px; }
-.opacity { display: flex; align-items: center; gap: 8px; color: var(--label-2); padding: 0 8px 0 4px; }
-.opacity svg.sf { width: 18px; height: 18px; }
-.opacity input { width: 96px; }
+.cal-hint { margin: 2px 8px 0; color: var(--label-2); font-size: 13px; text-align: center; text-wrap: balance; }
+.cal-hint b { color: var(--label); font-weight: 600; }
 
 /* PANEL DE MEDIDA: lectura y movimiento fino en la misma fila; acciones contextuales debajo. */
 .hud {
@@ -496,7 +491,7 @@ input[type="range"] { accent-color: var(--tint); margin: 0; height: 28px; cursor
 }
 
 /* LECTURAS: tipografía de instrumento, distinta de la de la interfaz. */
-.r-num, .r-sec, .r-unit, .r-hint, .angle span, .amp, .row-val, .row-sec, .quad-count span { font-family: var(--mono); letter-spacing: 0; }
+.r-num, .r-sec, .r-unit, .r-hint, .angle span, .amp, .row-val, .row-sec { font-family: var(--mono); letter-spacing: 0; }
 .r-num { font-size: 22px; font-weight: 500; line-height: 24px; }
 .r-unit { font-size: 13px; }
 .r-sec { font-size: 12px; }
